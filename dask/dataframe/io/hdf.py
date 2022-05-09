@@ -8,14 +8,13 @@ import pandas as pd
 from fsspec.utils import build_name_function, stringify_path
 from tlz import merge
 
-from ... import config, multiprocessing
-from ...base import compute_as_if_collection, get_scheduler, tokenize
-from ...delayed import Delayed, delayed
-from ...highlevelgraph import HighLevelGraph
-from ...layers import DataFrameIOLayer
-from ...utils import get_scheduler_lock
-from ..core import DataFrame, new_dd_object
-from .io import _link
+from dask import config, multiprocessing
+from dask.base import compute_as_if_collection, get_scheduler, tokenize
+from dask.dataframe.core import DataFrame
+from dask.dataframe.io.io import _link, from_map
+from dask.dataframe.io.utils import DataFrameIOFunction
+from dask.delayed import Delayed, delayed
+from dask.utils import get_scheduler_lock
 
 
 def _pd_to_hdf(pd_to_hdf, lock, args, kwargs=None):
@@ -270,7 +269,7 @@ and stopping index per file, or starting and stopping index of the global
 dataset."""
 
 
-class HDFFunctionWrapper:
+class HDFFunctionWrapper(DataFrameIOFunction):
     """
     HDF5 Function-Wrapper Class
 
@@ -278,12 +277,16 @@ class HDFFunctionWrapper:
     """
 
     def __init__(self, columns, dim, lock, common_kwargs):
-        self.columns = columns
+        self._columns = columns
         self.lock = lock
         self.common_kwargs = common_kwargs
         self.dim = dim
         if columns and dim > 1:
             self.common_kwargs = merge(common_kwargs, {"columns": columns})
+
+    @property
+    def columns(self):
+        return self._columns
 
     def project_columns(self, columns):
         """Return a new HDFFunctionWrapper object with
@@ -409,7 +412,10 @@ def read_hdf(
     # Build metadata
     with pd.HDFStore(paths[0], mode=mode) as hdf:
         meta_key = _expand_key(key, hdf)[0]
-    meta = pd.read_hdf(paths[0], meta_key, mode=mode, stop=0)
+    try:
+        meta = pd.read_hdf(paths[0], meta_key, mode=mode, stop=0)
+    except IndexError:  # if file is empty, don't set stop
+        meta = pd.read_hdf(paths[0], meta_key, mode=mode)
     if columns is not None:
         meta = meta[columns]
 
@@ -424,18 +430,16 @@ def read_hdf(
         paths, key, start, stop, chunksize, sorted_index, mode
     )
 
-    # Construct Layer and Collection
-    label = "read-hdf-"
-    name = label + tokenize(paths, key, start, stop, sorted_index, chunksize, mode)
-    layer = DataFrameIOLayer(
-        name,
-        columns,
-        parts,
+    # Construct the output collection with from_map
+    return from_map(
         HDFFunctionWrapper(columns, meta.ndim, lock, common_kwargs),
-        label=label,
+        parts,
+        meta=meta,
+        divisions=divisions,
+        label="read-hdf",
+        token=tokenize(paths, key, start, stop, sorted_index, chunksize, mode),
+        enforce_metadata=False,
     )
-    graph = HighLevelGraph({name: layer}, {name: set()})
-    return new_dd_object(graph, name, meta, divisions)
 
 
 def _build_parts(paths, key, start, stop, chunksize, sorted_index, mode):
@@ -540,6 +544,6 @@ def _get_keys_stops_divisions(path, key, stop, sorted_index, chunksize, mode):
     return keys, stops, divisions
 
 
-from ..core import _Frame
+from dask.dataframe.core import _Frame
 
 _Frame.to_hdf.__doc__ = to_hdf.__doc__

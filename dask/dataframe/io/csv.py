@@ -1,9 +1,7 @@
+import os
 from collections.abc import Mapping
 from io import BytesIO
 from warnings import catch_warnings, simplefilter, warn
-
-from ...highlevelgraph import HighLevelGraph
-from ...layers import DataFrameIOLayer
 
 try:
     import psutil
@@ -26,16 +24,17 @@ from pandas.api.types import (
     is_object_dtype,
 )
 
-from ...base import tokenize
-from ...bytes import read_bytes
-from ...core import flatten
-from ...delayed import delayed
-from ...utils import asciitable, parse_bytes
-from ..core import new_dd_object
-from ..utils import clear_known_categories
+from dask.base import tokenize
+from dask.bytes import read_bytes
+from dask.core import flatten
+from dask.dataframe.io.io import from_map
+from dask.dataframe.io.utils import DataFrameIOFunction
+from dask.dataframe.utils import clear_known_categories
+from dask.delayed import delayed
+from dask.utils import asciitable, parse_bytes
 
 
-class CSVFunctionWrapper:
+class CSVFunctionWrapper(DataFrameIOFunction):
     """
     CSV Function-Wrapper Class
     Reads CSV data from disk to produce a partition (given a key).
@@ -54,7 +53,7 @@ class CSVFunctionWrapper:
         kwargs,
     ):
         self.full_columns = full_columns
-        self.columns = columns
+        self._columns = columns
         self.colname = colname
         self.head = head
         self.header = header
@@ -62,6 +61,10 @@ class CSVFunctionWrapper:
         self.dtypes = dtypes
         self.enforce = enforce
         self.kwargs = kwargs
+
+    @property
+    def columns(self):
+        return self.full_columns if self._columns is None else self._columns
 
     def project_columns(self, columns):
         """Return a new CSVFunctionWrapper object with
@@ -113,14 +116,14 @@ class CSVFunctionWrapper:
         # Deal with column projection
         columns = self.full_columns
         project_after_read = False
-        if self.columns is not None:
+        if self._columns is not None:
             if self.kwargs:
                 # To be safe, if any kwargs are defined, avoid
                 # changing `usecols` here. Instead, we can just
                 # select columns after the read
                 project_after_read = True
             else:
-                columns = self.columns
+                columns = self._columns
                 rest_kwargs["usecols"] = columns
 
         # Call `pandas_read_text`
@@ -374,13 +377,8 @@ def text_blocks_to_pandas(
     for i in range(len(blocks)):
         parts.append([blocks[i], paths[i] if paths else None, is_first[i], is_last[i]])
 
-    # Create Blockwise layer
-    label = "read-csv-"
-    name = label + tokenize(reader, urlpath, columns, enforce, head, blocksize)
-    layer = DataFrameIOLayer(
-        name,
-        columns,
-        parts,
+    # Construct the output collection with from_map
+    return from_map(
         CSVFunctionWrapper(
             columns,
             None,
@@ -392,11 +390,13 @@ def text_blocks_to_pandas(
             enforce,
             kwargs,
         ),
-        label=label,
+        parts,
+        meta=head,
+        label="read-csv",
+        token=tokenize(reader, urlpath, columns, enforce, head, blocksize),
+        enforce_metadata=False,
         produces_tasks=True,
     )
-    graph = HighLevelGraph({name: layer}, {name: set()})
-    return new_dd_object(graph, name, head, (None,) * (len(blocks) + 1))
 
 
 def block_mask(block_lists):
@@ -436,7 +436,7 @@ def auto_blocksize(total_memory, cpu_count):
 
 
 def _infer_block_size():
-    default = 2 ** 25
+    default = 2**25
     if psutil is not None:
         with catch_warnings():
             simplefilter("ignore", RuntimeWarning)
@@ -515,6 +515,10 @@ def read_pandas(
         paths = get_fs_token_paths(urlpath, mode="rb", storage_options=storage_options)[
             2
         ]
+
+        # Check for at least one valid path
+        if len(paths) == 0:
+            raise OSError(f"{urlpath} resolved to no files")
 
         # Infer compression from first path
         compression = infer_compression(paths[0])
@@ -766,7 +770,7 @@ read_fwf = make_reader(pd.read_fwf, "read_fwf", "fixed-width")
 def _write_csv(df, fil, *, depend_on=None, **kwargs):
     with fil as f:
         df.to_csv(f, **kwargs)
-    return None
+    return os.path.normpath(fil.path)
 
 
 def to_csv(
@@ -953,12 +957,11 @@ def to_csv(
 
         import dask
 
-        dask.compute(*values, **compute_kwargs)
-        return [f.path for f in files]
+        return list(dask.compute(*values, **compute_kwargs))
     else:
         return values
 
 
-from ..core import _Frame
+from dask.dataframe.core import _Frame
 
 _Frame.to_csv.__doc__ = to_csv.__doc__

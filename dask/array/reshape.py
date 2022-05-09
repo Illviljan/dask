@@ -1,3 +1,4 @@
+import warnings
 from collections import Counter
 from functools import reduce
 from itertools import product
@@ -5,13 +6,27 @@ from operator import mul
 
 import numpy as np
 
-from .. import config
-from ..base import tokenize
-from ..core import flatten
-from ..highlevelgraph import HighLevelGraph
-from ..utils import M, parse_bytes
-from .core import Array, normalize_chunks
-from .utils import meta_from_array
+from dask import config
+from dask.array.core import Array, normalize_chunks
+from dask.array.utils import meta_from_array
+from dask.base import tokenize
+from dask.core import flatten
+from dask.highlevelgraph import HighLevelGraph
+from dask.utils import M, parse_bytes
+
+_not_implemented_message = """
+Dask's reshape only supports operations that merge or split existing dimensions
+evenly. For example:
+
+>>> x = da.ones((6, 5, 4), chunks=(3, 2, 2))
+>>> x.reshape((3, 2, 5, 4))  # supported, splits 6 into 3 & 2
+>>> x.reshape((30, 4))       # supported, merges 6 & 5 into 30
+>>> x.reshape((4, 5, 6))     # unsupported, existing dimensions split unevenly
+
+To work around this you may call reshape in multiple passes, or (if your data
+is small enough) call ``compute`` first and handle reshaping in ``numpy``
+directly.
+"""
 
 
 def reshape_rechunk(inshape, outshape, inchunks):
@@ -43,8 +58,7 @@ def reshape_rechunk(inshape, outshape, inchunks):
             ):  # 4 < 64, 4*4 < 64, 4*4*4 == 64
                 ileft -= 1
             if reduce(mul, inshape[ileft : ii + 1]) != dout:
-                raise ValueError("Shapes not compatible")
-
+                raise NotImplementedError(_not_implemented_message)
             # Special case to avoid intermediate rechunking:
             # When all the lower axis are completely chunked (chunksize=1) then
             # we're simply moving around blocks.
@@ -73,8 +87,7 @@ def reshape_rechunk(inshape, outshape, inchunks):
             while oleft >= 0 and reduce(mul, outshape[oleft : oi + 1]) < din:
                 oleft -= 1
             if reduce(mul, outshape[oleft : oi + 1]) != din:
-                raise ValueError("Shapes not compatible")
-
+                raise NotImplementedError(_not_implemented_message)
             # TODO: don't coalesce shapes unnecessarily
             cs = reduce(mul, outshape[oleft + 1 : oi + 1])
 
@@ -187,7 +200,8 @@ def reshape(x, shape, merge_chunks=True, limit=None):
     numpy.reshape
     """
     # Sanitize inputs, look for -1 in shape
-    from .slicing import sanitize_index
+    from dask.array.core import PerformanceWarning
+    from dask.array.slicing import sanitize_index
 
     shape = tuple(map(sanitize_index, shape))
     known_sizes = [s for s in shape if s != -1]
@@ -233,25 +247,45 @@ def reshape(x, shape, merge_chunks=True, limit=None):
     inchunks, outchunks = reshape_rechunk(x.shape, shape, x.chunks)
     # Check output chunks are not too large
     max_chunksize_in_bytes = reduce(mul, [max(i) for i in outchunks]) * x.dtype.itemsize
-    if limit is None and config.get("array.slicing.split-large-chunks") is not False:
+
+    if limit is None:
         limit = parse_bytes(config.get("array.chunk-size"))
+        split = config.get("array.slicing.split-large-chunks", None)
+    else:
+        limit = parse_bytes(limit)
+        split = True
+
     if max_chunksize_in_bytes > limit:
-        # Leave chunk sizes unaltered where possible
-        matching_chunks = Counter(inchunks) & Counter(outchunks)
-        chunk_plan = []
-        for out in outchunks:
-            if matching_chunks[out] > 0:
-                chunk_plan.append(out)
-                matching_chunks[out] -= 1
-            else:
-                chunk_plan.append("auto")
-        outchunks = normalize_chunks(
-            chunk_plan,
-            shape=shape,
-            limit=limit,
-            dtype=x.dtype,
-            previous_chunks=inchunks,
-        )
+        if split is None:
+            msg = (
+                "Reshaping is producing a large chunk. To accept the large\n"
+                "chunk and silence this warning, set the option\n"
+                "    >>> with dask.config.set(**{'array.slicing.split_large_chunks': False}):\n"
+                "    ...     array.reshape(shape)\n\n"
+                "To avoid creating the large chunks, set the option\n"
+                "    >>> with dask.config.set(**{'array.slicing.split_large_chunks': True}):\n"
+                "    ...     array.reshape(shape)"
+                "Explictly passing ``limit`` to ``reshape`` will also silence this warning\n"
+                "    >>> array.reshape(shape, limit='128 MiB')"
+            )
+            warnings.warn(msg, PerformanceWarning, stacklevel=6)
+        elif split:
+            # Leave chunk sizes unaltered where possible
+            matching_chunks = Counter(inchunks) & Counter(outchunks)
+            chunk_plan = []
+            for out in outchunks:
+                if matching_chunks[out] > 0:
+                    chunk_plan.append(out)
+                    matching_chunks[out] -= 1
+                else:
+                    chunk_plan.append("auto")
+            outchunks = normalize_chunks(
+                chunk_plan,
+                shape=shape,
+                limit=limit,
+                dtype=x.dtype,
+                previous_chunks=inchunks,
+            )
 
     x2 = x.rechunk(inchunks)
 

@@ -1,6 +1,512 @@
 Changelog
 =========
 
+.. _v2022.05.0:
+
+2022.05.0
+---------
+
+Released on May 2, 2022
+
+Highlights
+^^^^^^^^^^
+This is a bugfix release for `this issue <https://github.com/dask/distributed/issues/6255>`_.
+
+Documentation
+^^^^^^^^^^^^^
+- Add highlights section to 2022.04.2 release notes (:pr:`9012`) `James Bourbeau`_
+
+
+.. _v2022.04.2:
+
+2022.04.2
+---------
+
+Released on April 29, 2022
+
+Highlights
+^^^^^^^^^^
+This release includes several deprecations/breaking API changes to
+``dask.dataframe.read_parquet`` and ``dask.dataframe.to_parquet``:
+
+- ``to_parquet`` no longer writes ``_metadata`` files by default. If you want to
+  write a ``_metadata`` file, you can pass in ``write_metadata_file=True``.
+- ``read_parquet`` now defaults to ``split_row_groups=False``, which results in one
+  Dask dataframe partition per parquet file when reading in a parquet dataset.
+  If you're working with large parquet files you may need to set
+  ``split_row_groups=True`` to reduce your partition size.
+- ``read_parquet`` no longer calculates divisions by default. If you require
+  ``read_parquet`` to return dataframes with known divisions, please set
+  ``calculate_divisions=True``.
+- ``read_parquet`` has deprecated the ``gather_statistics`` keyword argument.
+  Please use the ``calculate_divisions`` keyword argument instead.
+- ``read_parquet`` has deprecated the ``require_extensions`` keyword argument.
+  Please use the ``parquet_file_extension`` keyword argument instead.
+
+New Features
+^^^^^^^^^^^^
+- Add ``removeprefix`` and ``removesuffix`` as ``StringMethods`` (:pr:`8912`) `Jorge López`_
+
+Enhancements
+^^^^^^^^^^^^
+- Call ``fs.invalidate_cache`` in ``to_parquet`` (:pr:`8994`) `Jim Crist-Harif`_
+- Change ``to_parquet`` default to ``write_metadata_file=None`` (:pr:`8988`) `Jim Crist-Harif`_
+- Let arg reductions pass ``keepdims`` (:pr:`8926`) `Julia Signell`_
+- Change ``split_row_groups`` default to ``False`` in ``read_parquet`` (:pr:`8981`) `Richard (Rick) Zamora`_
+- Improve ``NotImplementedError`` message for ``da.reshape`` (:pr:`8987`) `Jim Crist-Harif`_
+- Simplify ``to_parquet`` compute path (:pr:`8982`) `Jim Crist-Harif`_
+- Raise an error if you try to use ``vindex`` with a Dask object (:pr:`8945`) `Julia Signell`_
+- Avoid ``pre_buffer=True`` when a precache method is specified (:pr:`8957`) `Richard (Rick) Zamora`_
+- ``from_dask_array`` uses ``blockwise`` instead of merging graphs (:pr:`8889`) `Bryan Weber`_
+- Use ``pre_buffer=True`` for "pyarrow" Parquet engine (:pr:`8952`) `Richard (Rick) Zamora`_
+
+Bug Fixes
+^^^^^^^^^
+- Handle ``dtype=None`` correctly in ``da.full`` (:pr:`8954`) `Tom White`_
+- Fix ``dask-sql`` bug caused by ``blockwise`` fusion (:pr:`8989`) `Richard (Rick) Zamora`_
+- ``to_parquet`` errors for non-string column names (:pr:`8990`) `Jim Crist-Harif`_
+- Make sure ``da.roll`` works even if shape is 0 (:pr:`8925`) `Julia Signell`_
+- Fix recursion error issue with ``set_index`` (:pr:`8967`) `Paul Hobson`_
+- Stringify ``BlockwiseDepDict`` mapping values when ``produces_keys=True`` (:pr:`8972`) `Richard (Rick) Zamora`_
+- Use `DataFram`eIOLayer` in ``DataFrame.from_delayed`` (:pr:`8852`) `Richard (Rick) Zamora`_
+- Check that values for the ``in`` predicate in ``read_parquet`` are correct (:pr:`8846`) `Bryan Weber`_
+- Fix bug for reduction of zero dimensional arrays (:pr:`8930`) `Tom White`_
+- Specify ``dtype`` when deciding division using ``np.linspace`` in ``read_sql_query`` (:pr:`8940`) `Cheun Hong`_
+
+Deprecations
+^^^^^^^^^^^^
+- Deprecate ``gather_statistics`` from ``read_parquet`` (:pr:`8992`) `Richard (Rick) Zamora`_
+- Change ``require_extension`` to top-level ``parquet_file_extension`` ``read_parquet`` kwarg (:pr:`8935`) `Richard (Rick) Zamora`_
+
+Documentation
+^^^^^^^^^^^^^
+- Update ``write_metadata_file`` discussion in documentation (:pr:`8995`) `Richard (Rick) Zamora`_
+- Update ``DataFrame.merge`` docstring (:pr:`8966`) `Pavithra Eswaramoorthy`_
+- Added description for parameter ``align_arrays`` in ``array.blockwise()`` (:pr:`8977`) `ParticularMiner`_
+- ecommend not to use ``map_block(drop_axis=...)`` on chunked axes of an array (:pr:`8921`) `ParticularMiner`_
+- Add copy button to code snippets in docs (:pr:`8956`) `James Bourbeau`_
+
+Maintenance
+^^^^^^^^^^^
+- Pandas 1.5.0 compatibility (:pr:`8961`) `Ian Rose`_
+- Add ``pytest-timeout`` to distributed envs on CI (:pr:`8986`) `Julia Signell`_
+- Improve ``read_parquet`` docstring formatting (:pr:`8971`) `Bryan Weber`_
+- Remove ``pytest.warns(None)`` (:pr:`8924`) `Pavithra Eswaramoorthy`_
+- Document Python 3.10 as supported (:pr:`8976`) `Eray Aslan`_
+- ``parse_timedelta`` option to enforce explicit unit (:pr:`8969`) `crusaderky`_
+- ``mypy`` compatibility (:pr:`8854`) `Paul Hobson`_
+- Add a docs page for Dask & Parquet (:pr:`8899`) `Jim Crist-Harif`_
+- Adds configuration to ignore revs in blame (:pr:`8933`) `Bryan Weber`_
+
+.. _v2022.04.1:
+
+2022.04.1
+---------
+
+Released on April 15, 2022
+
+New Features
+^^^^^^^^^^^^
+- Add missing NumPy ufuncs: ``abs``, ``left_shift``, ``right_shift``, ``positive``. (:pr:`8920`) `Tom White`_
+
+Enhancements
+^^^^^^^^^^^^
+- Avoid collecting parquet metadata in pyarrow when ``write_metadata_file=False`` (:pr:`8906`) `Richard (Rick) Zamora`_
+- Better error for failed wildcard path in ``dd.read_csv()`` (fixes #8878) (:pr:`8908`) `Roger Filmyer`_
+- Return ``da.Array`` rather than ``dd.Series`` for non-ufunc elementwise functions on ``dd.Series`` (:pr:`8558`) `Julia Signell`_
+- Let ``get_dummies`` use ``meta`` computation in ``map_partitions`` (:pr:`8898`) `Julia Signell`_
+- Masked scalars input to ``da.from_array`` (:pr:`8895`) `David Hassell`_
+- Raise ``ValueError`` in ``merge_asof`` for duplicate ``kwargs`` (:pr:`8861`) `Bryan Weber`_
+
+Bug Fixes
+^^^^^^^^^
+- Make ``is_monotonic`` work when some partitions are empty (:pr:`8897`) `Julia Signell`_
+- Fix custom getter in ``da.from_array`` when ``inline_array=False`` (:pr:`8903`) `Ian Rose`_
+- Correctly handle dict-specification for rechunk. (:pr:`8859`) `Richard`_
+- Fix ``merge_asof``: drop index column if ``left_on == right_on`` (:pr:`8874`) `Gil Forsyth`_
+
+Deprecations
+^^^^^^^^^^^^
+- Warn users that ``engine='auto'`` will change in future (:pr:`8907`) `Jim Crist-Harif`_
+- Remove ``pyarrow-legacy`` engine from parquet API (:pr:`8835`) `Richard (Rick) Zamora`_
+
+Documentation
+^^^^^^^^^^^^^
+- Add note on missing parameter ``out`` for ``dask.array.dot`` (:pr:`8913`) `Francesco Andreuzzi`_
+- Update ``DataFrame.query`` docstring (:pr:`8890`) `Pavithra Eswaramoorthy`_
+
+Maintenance
+^^^^^^^^^^^
+- Don't test ``da.prod`` on large integer data (:pr:`8893`) `Jim Crist-Harif`_
+- Add ``network`` marks to tests that fail without an internet connection (:pr:`8881`) `Paul Hobson`_
+- Fix gpuCI GHA version (:pr:`8891`) `Charles Blackmon-Luca`_
+- ``xfail``/``skip`` some flaky ``distributed`` tests (:pr:`8887`) `Jim Crist-Harif`_
+- Remove unused (deprecated) code from ``ArrowDatasetEngine`` (:pr:`8885`) `Richard (Rick) Zamora`_
+- Add mild typing to common utils functions, part 2 (:pr:`8867`) `crusaderky`_
+- Documentation of Limitation of ``sample()`` (:pr:`8858`) `Nadiem Sissouno`_
+
+
+.. _v2022.04.0:
+
+2022.04.0
+---------
+
+Released on April 1, 2022
+
+New Features
+^^^^^^^^^^^^
+- Add Python 3.10 support (:pr:`8566`) `James Bourbeau`_
+
+Enhancements
+^^^^^^^^^^^^
+- Add check on ``dtype.itemsize`` in order to produce a useful error (:pr:`8860`) `Davide Gavio`_
+- Add mild typing to common utils functions (:pr:`8848`) `Matthew Rocklin`_
+- Add sanity checks to ``divisions`` ``setter`` (:pr:`8806`) `Jim Crist-Harif`_
+- Use ``Blockwise`` and ``map_partitions`` for more tasks (:pr:`8831`) `Bryan Weber`_
+
+Bug Fixes
+^^^^^^^^^
+- Fix ``dataframe.merge_asof`` to preserve ``right_on`` column (:pr:`8857`) `Sarah Charlotte Johnson`_
+- Fix "Buffer dtype mismatch" for pandas >= 1.3 on 32bit (:pr:`8851`) `Ben Greiner`_
+- Fix slicing fusion by altering ``SubgraphCallable`` ``getter`` (:pr:`8827`) `Ian Rose`_
+
+Deprecations
+^^^^^^^^^^^^
+- Remove support for PyPy (:pr:`8863`) `James Bourbeau`_
+- Drop ``setuptools`` at runtime (:pr:`8855`) `crusaderky`_
+- Remove ``dataframe.tseries.resample.getnanos`` (:pr:`8834`) `Sarah Charlotte Johnson`_
+
+Documentation
+^^^^^^^^^^^^^
+- Organize diagnostic and performance docs (:pr:`8871`) `Naty Clementi`_
+- Add image to explain ``drop_axis`` option of ``map_blocks`` (:pr:`8868`) `ParticularMiner`_
+
+Maintenance
+^^^^^^^^^^^
+- Update gpuCI ``RAPIDS_VER`` to ``22.06`` (:pr:`8828`)
+- Restore ``test_parquet`` in http (:pr:`8850`) `Bryan Weber`_
+- Simplify gpuCI updating workflow (:pr:`8849`) `Charles Blackmon-Luca`_
+
+
+.. _v2022.03.0:
+
+2022.03.0
+---------
+
+Released on March 18, 2022
+
+New Features
+^^^^^^^^^^^^
+- Bag: add implementation for reservoir sampling (:pr:`7636`) `Daniel Mesejo-León`_
+- Add ``ma.count`` to Dask array (:pr:`8785`) `David Hassell`_
+- Change ``to_parquet`` default to ``compression="snappy"`` (:pr:`8814`) `Jim Crist-Harif`_
+- Add ``weights`` parameter to ``dask.array.reduction`` (:pr:`8805`) `David Hassell`_
+- Add ``ddf.compute_current_divisions`` to get divisions on a sorted index or column (:pr:`8517`) `Julia Signell`_
+
+Enhancements
+^^^^^^^^^^^^
+- Pass ``__name__`` and ``__doc__`` through on DelayedLeaf (:pr:`8820`) `Leo Gao`_
+- Raise exception for not implemented merge ``how`` option (:pr:`8818`) `Naty Clementi`_
+- Move ``Bag.map_partitions`` to ``Blockwise`` (:pr:`8646`) `Richard (Rick) Zamora`_
+- Improve error messages for malformed config files (:pr:`8801`) `Jim Crist-Harif`_
+- Revise column-projection optimization to capture common dask-sql patterns (:pr:`8692`) `Richard (Rick) Zamora`_
+- Useful error for empty divisions (:pr:`8789`) `Pavithra Eswaramoorthy`_
+- Scipy 1.8.0 compat: copy private classes into dask/array/stats.py (:pr:`8694`) `Julia Signell`_
+- Raise warning when using multiple types of schedulers where one is ``distributed`` (:pr:`8700`) `Pedro Silva`_
+
+Bug Fixes
+^^^^^^^^^
+- Fix bug in applying != filter in ``read_parquet`` (:pr:`8824`) `Richard (Rick) Zamora`_
+- Fix ``set_index`` when directly passed a dask Index (:pr:`8680`) `Paul Hobson`_
+- Quick fix for unbounded memory usage in tensordot  (:pr:`7980`) `Genevieve Buckley`_
+- If hdf file is empty, don't fail on meta creation (:pr:`8809`) `Julia Signell`_
+- Update ``clone_key("x")`` to retain prefix (:pr:`8792`) `crusaderky`_
+- Fix "physical" column bug in pyarrow-based ``read_parquet`` (:pr:`8775`) `Richard (Rick) Zamora`_
+- Fix ``groupby.shift`` bug caused by unsorted partitions after shuffle (:pr:`8782`) `kori73`_
+- Fix serialization bug (:pr:`8786`) `Richard (Rick) Zamora`_
+
+Deprecations
+^^^^^^^^^^^^
+- Bump diagnostics bokeh dependency to 2.4.2 (:pr:`8791`) `Charles Blackmon-Luca`_
+- Deprecate ``bcolz`` support (:pr:`8754`) `Pavithra Eswaramoorthy`_
+- Finish making ``map_overlap`` default boundary ``kwarg`` ``'none'`` (:pr:`8743`) `Genevieve Buckley`_
+
+Documentation
+^^^^^^^^^^^^^
+- Custom collection example docs fix (:pr:`8807`) `Doug Davis`_
+- Add ``Series.str``, ``Series.dt``, and ``Series.cat`` accessors to docs (:pr:`8757`) `Sarah Charlotte Johnson`_
+- Fix docstring for ``ddf.compute_current_divisions`` (:pr:`8793`) `Julia Signell`_
+- Dashboard docs on /status page  (:pr:`8648`) `Naty Clementi`_
+- Clarify divisions ``kwarg`` in repartition docstring (:pr:`8781`) `Sarah Charlotte Johnson`_
+- Update Docker images to use ghcr.io (:pr:`8774`) `Jacob Tomlinson`_
+
+Maintenance
+^^^^^^^^^^^
+- Reduce gpuci ``pytest`` parallelism (:pr:`8826`) `GALI PREM SAGAR`_
+- ``absolufy-imports`` - No relative imports - PEP8 (:pr:`8796`) `Julia Signell`_
+- Tidy up ``assert_eq`` calls in array tests (:pr:`8812`) `Julia Signell`_
+- Avoid ``pytest.warns(None)`` (:pr:`8718`) `LSturtew`_
+- Fix ``test_describe_empty`` to work without global ``-Werror`` (:pr:`8291`) `Michał Górny`_
+- Temporarily xfail graphviz tests on windows (:pr:`8794`) `Jim Crist-Harif`_
+- Use ``packaging.parse`` for ``md5`` compatibility (:pr:`8763`) `James Bourbeau`_
+- Make ``tokenize`` work in a FIPS 140-2 environment (:pr:`8762`) `Jim Crist-Harif`_
+- Label issues and PRs on open with 'needs triage' (:pr:`8761`) `Julia Signell`_
+- Add some extra test coverage (:pr:`8302`) `lrjball`_
+- Specify action version and change from ``pull_request_target`` to ``pull_request`` (:pr:`8767`) `Julia Signell`_
+- Make scheduler ``kwarg`` pass though to sub functions in ``da.assert_eq`` (:pr:`8755`) `Julia Signell`_
+
+
+.. _v2022.02.1:
+
+2022.02.1
+---------
+
+Released on February 25, 2022
+
+New Features
+^^^^^^^^^^^^
+- Add  aggregate functions ``first`` and ``last`` to ``dask.dataframe.pivot_table`` (:pr:`8649`) `Knut Nordanger`_
+- Add ``std()`` support for ``datetime64`` ``dtype`` for pandas-like objects (:pr:`8523`) `Ben Glossner`_
+- Add materialized task counts to ``HighLevelGraph`` and ``Layer`` html reprs (:pr:`8589`) `kori73`_
+
+Enhancements
+^^^^^^^^^^^^
+- Do not allow iterating a ``DataFrameGroupBy`` (:pr:`8696`) `Bryan Weber`_
+- Fix missing newline after ``info()`` call on empty ``DataFrame`` (:pr:`8727`) `Naty Clementi`_
+- Add ``groupby.compute`` as a not implemented method (:pr:`8734`) `Dranaxel`_
+- Improve multi dataframe join performance (:pr:`8740`) `Holden Karau`_
+- Include ``bool`` type for ``Index`` (:pr:`8732`) `Naty Clementi`_
+- Allow ``ArrowDatasetEngine`` subclass to override pandas->arrow conversion also for partitioned write (:pr:`8741`) `Joris Van den Bossche`_
+- Increase performance of k-diagonal extraction in ``da.diag()`` and ``da.diagonal()`` (:pr:`8689`) `ParticularMiner`_
+- Change ``linspace`` creation to match numpy when num equal to 0 (:pr:`8676`) `Peter`_
+- Tokenize ``dataclasses`` (:pr:`8557`) `Gabe Joseph`_
+- Update ``tokenize`` to treat ``dict`` and ``kwargs`` differently (:pr:`8655`) `James Bourbeau`_
+
+Bug Fixes
+^^^^^^^^^
+- Fix bug in ``dask.array.roll()`` for roll-shifts that match the size of the input array (:pr:`8723`) `ParticularMiner`_
+- Fix for ``normalize_function`` ``dataclass`` methods (:pr:`8527`) `Sarah Charlotte Johnson`_
+- Fix rechunking with zero-size-chunks (:pr:`8703`) `ParticularMiner`_
+- Move creation of ``sqlalchemy`` connection for picklability (:pr:`8745`) `Julia Signell`_
+
+Deprecations
+^^^^^^^^^^^^
+- Drop Python 3.7 (:pr:`8572`) `James Bourbeau`_
+- Deprecate ``iteritems`` (:pr:`8660`) `James Bourbeau`_
+- Deprecate ``dataframe.tseries.resample.getnanos`` (:pr:`8752`) `Sarah Charlotte Johnson`_
+- Add deprecation warning for pyarrow-legacy engine (:pr:`8758`) `Richard (Rick) Zamora`_
+
+Documentation
+^^^^^^^^^^^^^
+- Update link typos in changelog (:pr:`8717`) `James Bourbeau`_
+- Clarify ``dask.visualize`` docstring (:pr:`8710`) `Dranaxel`_
+- Update Docker example to use current best practices (:pr:`8731`) `Jacob Tomlinson`_
+- Update docs to include ``distributed.Client.preload`` (:pr:`8679`) `Bryan Weber`_
+- Document monthly social meeting (:pr:`8595`) `Thomas Grainger`_
+- Add docs for Gen2 access with RBAC/ACL i.e. security principal (:pr:`8748`) `Martin Thøgersen`_
+- Use Dask configuration extension from ``dask-sphinx-theme`` (:pr:`8751`) `Benjamin Zaitlen`_
+
+Maintenance
+^^^^^^^^^^^
+- Unpin ``coverage`` in CI (:pr:`8690`) `James Bourbeau`_
+- Add manual trigger for running test suite (:pr:`8716`) `James Bourbeau`_
+- Xfail ``scheduler_HLG_unpack_import``; flaky test (:pr:`8724`) `Mike McCarty`_
+- Temporarily remove ``scipy`` upstream CI build (:pr:`8725`) `James Bourbeau`_
+- Bump pre-release version to be greater than stable releases (:pr:`8728`) `Charles Blackmon-Luca`_
+- Move custom sort function logic to internal ``sort_values`` (:pr:`8571`) `Charles Blackmon-Luca`_
+- Pin ``cloudpickle`` and ``scipy`` in docs requirements (:pr:`8737`) `Julia Signell`_
+- Make the labeler not delete labels, and look for the docs at the right spot (:pr:`8746`) `Julia Signell`_
+- Fix docs build warnings (:pr:`8432`) `Kristopher Overholt`_
+- Update test status badge (:pr:`8747`) `James Bourbeau`_
+- Fix parquet ``test_pandas_timestamp_overflow_pyarrow`` test (:pr:`8733`) `Joris Van den Bossche`_
+- Only run PR builds on changes to relevant files (:pr:`8756`) `Charles Blackmon-Luca`_
+
+
+.. _v2022.02.0:
+
+2022.02.0
+---------
+
+Released on February 11, 2022
+
+New Features
+^^^^^^^^^^^^
+- Add ``region`` to ``to_zarr`` when using existing array (:pr:`8590`) `Chris Roat`_
+- Add ``engine_kwargs`` support to ``dask.dataframe.to_sql`` (:pr:`8609`) `Amir Kadivar`_
+- Add ``include_path_column`` arg to ``read_json`` (:pr:`8603`) `Bryan Weber`_
+- Add ``expand_dims`` to Dask array (:pr:`8687`) `Tom White`_
+
+Enhancements
+^^^^^^^^^^^^
+- Add scheduler option to ``assert_eq`` utilities (:pr:`8610`) `Xinrong Meng`_
+- Fix eye inconsistency with NumPy for ``dtype=None`` (:pr:`8685`) `Tom White`_
+- Fix concatenate inconsistency with NumPy for ``axis=None`` (:pr:`8686`) `Tom White`_
+- Type annotations, part 1 (:pr:`8295`) `crusaderky`_
+- Really allow any iterable to be passed as a ``meta`` (:pr:`8629`) `Julia Signell`_
+- Use ``map_partitions`` (Blockwise) in ``to_parquet`` (:pr:`8487`) `Richard (Rick) Zamora`_
+
+Bug Fixes
+^^^^^^^^^
+- Result of reducing an array should not depend on its chunk-structure (:pr:`8637`) `ParticularMiner`_
+- Pass place-holder metadata to ``map_partitions`` in ACA code path (:pr:`8643`) `Richard (Rick) Zamora`_
+
+Deprecations
+^^^^^^^^^^^^
+- Deprecate ``is_monotonic`` (:pr:`8653`) `James Bourbeau`_
+- Remove some deprecations (:pr:`8605`) `James Bourbeau`_
+
+Documentation
+^^^^^^^^^^^^^
+- Add Domino Data Lab to Hosted / managed Dask clusters (:pr:`8675`) `Ray Bell`_
+- Fix inter-linking and remove deprecated function (:pr:`8715`) `Julia Signell`_
+- Fix imbalanced backticks. (:pr:`8693`) `Matthias Bussonnier`_
+- Add documentation for high level graph visualization (:pr:`8483`) `Genevieve Buckley`_
+- Update documentation of ``ProgressBar`` ``out`` parameter (:pr:`8604`) `Pedro Silva`_
+- Improve documentation of ``dask.config.set`` (:pr:`8705`) `crusaderky`_
+- Revert mention to ``mypy`` among type checkers (:pr:`8699`) `crusaderky`_
+
+Maintenance
+^^^^^^^^^^^
+- Update warning handling in ``get_dummies`` tests (:pr:`8651`) `James Bourbeau`_
+- Add a github changelog template (:pr:`8714`) `Julia Signell`_
+- Update year in LICENSE.txt (:pr:`8665`) `David Hoese`_
+- Update ``pre-commit`` version  (:pr:`8691`) `James Bourbeau`_
+- Include ``scipy`` in upstream CI build (:pr:`8681`) `James Bourbeau`_
+- Temporarily pin ``scipy < 1.8.0`` in CI (:pr:`8683`) `James Bourbeau`_
+- Pin ``scipy`` to less than 1.8.0 in GPU CI (:pr:`8698`) `Julia Signell`_
+- Avoid ``pytest.warns(None)`` in ``test_multi.py`` (:pr:`8678`) `James Bourbeau`_
+- Update GHA concurrent job cancellation (:pr:`8652`) `James Bourbeau`_
+- Make ``test__get_paths`` robust to ``site.PREFIXES`` being set (:pr:`8644`) `James Bourbeau`_
+- Bump gpuCI PYTHON_VER to 3.9 (:pr:`8642`) `Charles Blackmon-Luca`_
+
+
+.. _v2022.01.1:
+
+2022.01.1
+---------
+
+Released on January 28, 2022
+
+New Features
+^^^^^^^^^^^^
+- Add ``dask.dataframe.series.view()`` (:pr:`8533`) `Pavithra Eswaramoorthy`_
+
+Enhancements
+^^^^^^^^^^^^
+- Update ``tz`` for ``fastparquet`` + ``pandas`` 1.4.0 (:pr:`8626`) `Martin Durant`_
+- Cleaning up misc tests for ``pandas`` compat (:pr:`8623`) `Julia Signell`_
+- Moving to ``SQLAlchemy >= 1.4`` (:pr:`8158`) `McToel`_
+- Pandas compat: Filter sparse warnings (:pr:`8621`) `Julia Signell`_
+- Fail if ``meta`` is not a ``pandas`` object (:pr:`8563`) `Julia Signell`_
+- Use ``fsspec.parquet`` module for better remote-storage ``read_parquet`` performance (:pr:`8339`) `Richard (Rick) Zamora`_
+- Move DataFrame ACA aggregations to HLG (:pr:`8468`) `Richard (Rick) Zamora`_
+- Add optional information about originating function call in ``DataFrameIOLayer`` (:pr:`8453`) `Richard (Rick) Zamora`_
+- Blockwise array creation redux (:pr:`7417`) `Ian Rose`_
+- Refactor config default search path retrieval (:pr:`8573`) `James Bourbeau`_
+- Add ``optimize_graph`` flag to ``Bag.to_dataframe`` function (:pr:`8486`) `Maxim Lippeveld`_
+- Make sure that delayed output operations still return lists of paths (:pr:`8498`) `Julia Signell`_
+- Pandas compat: Fix ``to_frame`` ``name`` to not pass ``None`` (:pr:`8554`) `Julia Signell`_
+- Pandas compat: Fix ``axis=None`` warning (:pr:`8555`) `Julia Signell`_
+- Expand Dask YAML config search directories (:pr:`8531`) `abergou`_
+
+Bug Fixes
+^^^^^^^^^
+- Fix ``groupby.cumsum`` with series grouped by index (:pr:`8588`) `Julia Signell`_
+- Fix ``derived_from`` for ``pandas`` methods (:pr:`8612`) `Thomas J. Fan`_
+- Enforce boolean ``ascending`` for ``sort_values`` (:pr:`8440`) `Charles Blackmon-Luca`_
+- Fix parsing of ``__setitem__`` indices (:pr:`8601`) `David Hassell`_
+- Avoid divide by zero in slicing  (:pr:`8597`) `Doug Davis`_
+
+Deprecations
+^^^^^^^^^^^^
+- Downgrade ``meta`` error in (:pr:`8563`) to warning (:pr:`8628`) `Julia Signell`_
+- Pandas compat: Deprecate ``append`` when ``pandas >= 1.4.0`` (:pr:`8617`) `Julia Signell`_
+
+Documentation
+^^^^^^^^^^^^^
+- Replace outdated ``columns`` argument with ``meta`` in DataFrame constructor (:pr:`8614`) `kori73`_
+- Refactor deploying docs (:pr:`8602`) `Jacob Tomlinson`_
+
+Maintenance
+^^^^^^^^^^^
+- Pin ``coverage`` in CI (:pr:`8631`) `James Bourbeau`_
+- Move ``cached_cumsum`` imports to be from ``dask.utils`` (:pr:`8606`) `James Bourbeau`_
+- Update gpuCI ``RAPIDS_VER`` to ``22.04`` (:pr:`8600`)
+- Update cocstring for ``from_delayed`` function  (:pr:`8576`) `Kirito1397`_
+- Handle ``plot_width`` / ``plot_height`` deprecations (:pr:`8544`) `Bryan Van de Ven`_
+- Remove unnecessary ``pyyaml`` ``importorskip`` (:pr:`8562`) `James Bourbeau`_
+- Specify scheduler in DataFrame ``assert_eq`` (:pr:`8559`) `Gabe Joseph`_
+
+
+.. _v2022.01.0:
+
+2022.01.0
+---------
+
+Released on January 14, 2022
+
+New Features
+^^^^^^^^^^^^
+- Add ``groupby.shift`` method (:pr:`8522`) `kori73`_
+- Add ``DataFrame.nunique`` (:pr:`8479`) `Sarah Charlotte Johnson`_
+- Add ``da.ndim`` to match ``np.ndim`` (:pr:`8502`) `Julia Signell`_
+
+Enhancements
+^^^^^^^^^^^^
+- Only show ``percentile`` ``interpolation=`` keyword warning if NumPy version >= 1.22 (:pr:`8564`) `Julia Signell`_
+- Raise ``PerformanceWarning`` when ``limit`` and ``"array.slicing.split-large-chunks"`` are ``None`` (:pr:`8511`) `Julia Signell`_
+- Define ``normalize_seq`` function at import time (:pr:`8521`) `Illviljan`_
+- Ensure that divisions are alway tuples (:pr:`8393`) `Charles Blackmon-Luca`_
+- Allow a callable scheduler for ``bag.groupby`` (:pr:`8492`) `Julia Signell`_
+- Save Zarr arrays with dask-on-ray scheduler (:pr:`8472`) `TnTo`_
+- Make byte blocks more even in ``read_bytes`` (:pr:`8459`) `Martin Durant`_
+- Improved the efficiency of ``matmul()`` by completely removing concatenation (:pr:`8423`) `ParticularMiner`_
+- Limit max chunk size when reshaping dask arrays (:pr:`8124`) `Genevieve Buckley`_
+- Changes for fastparquet superthrift (:pr:`8470`) `Martin Durant`_
+
+Bug Fixes
+^^^^^^^^^
+- Fix boolean indices in array assignment (:pr:`8538`) `David Hassell`_
+- Detect default ``dtype`` on array-likes (:pr:`8501`) `aeisenbarth`_
+- Fix ``optimize_blockwise`` bug for duplicate dependency names (:pr:`8542`) `Richard (Rick) Zamora`_
+- Update warnings for ``DataFrame.GroupBy.apply`` and transform (:pr:`8507`) `Sarah Charlotte Johnson`_
+- Track HLG layer name in ``Delayed`` (:pr:`8452`) `Gabe Joseph`_
+- Fix single item ``nanmin`` and ``nanmax`` reductions (:pr:`8484`) `Julia Signell`_
+- Make ``read_csv`` with ``comment`` ``kwarg`` work even if there is a comment in the header (:pr:`8433`) `Julia Signell`_
+
+Deprecations
+^^^^^^^^^^^^
+- Replace ``interpolation`` with ``method`` and ``method`` with ``internal_method`` (:pr:`8525`) `Julia Signell`_
+- Remove daily stock demo utility (:pr:`8477`) `James Bourbeau`_
+
+Documentation
+^^^^^^^^^^^^^
+- Add a join example in docs that be run with copy/paste (:pr:`8520`) `kori73`_
+- Mention dashboard link in config (:pr:`8510`) `Ray Bell`_
+- Fix changelog section hyperlinks (:pr:`8534`) `Aneesh Nema`_
+- Hyphenate "single-machine scheduler" for consistency (:pr:`8519`) `Deepyaman Datta`_
+- Normalize whitespace in doctests in ``slicing.py`` (:pr:`8512`) `Maren Westermann`_
+- Best practices storage line typo (:pr:`8529`) `Michael Delgado`_
+- Update figures (:pr:`8401`) `Sarah Charlotte Johnson`_
+- Remove ``pyarrow``-only reference from ``split_row_groups`` in ``read_parquet`` docstring (:pr:`8490`) `Naty Clementi`_
+
+Maintenance
+^^^^^^^^^^^
+- Remove obsolete ``LocalFileSystem`` tests that fail for ``fsspec>=2022.1.0`` (:pr:`8565`) `Richard (Rick) Zamora`_
+- Tweak: "RuntimeWarning: invalid value encountered in reciprocal" (:pr:`8561`) `crusaderky`_
+- Fix ``skipna=None`` for ``DataFrame.sem`` (:pr:`8556`) `Julia Signell`_
+- Fix ``PANDAS_GT_140`` (:pr:`8552`) `Julia Signell`_
+- Collections with HLG must always implement ``__dask_layers__`` (:pr:`8548`) `crusaderky`_
+- Work around race condition in ``import llvmlite`` (:pr:`8550`) `crusaderky`_
+- Set a minimum version for ``pyyaml`` (:pr:`8545`) `Gaurav Sheni`_
+- Adding ``nodefaults`` to environments to fix ``tiledb`` + mac issue (:pr:`8505`) `Julia Signell`_
+- Set ceiling for ``setuptools`` (:pr:`8509`) `Julia Signell`_
+- Add workflow / recipe to generate Dask nightlies (:pr:`8469`) `Charles Blackmon-Luca`_
+- Bump gpuCI ``CUDA_VER`` to 11.5 (:pr:`8489`) `Charles Blackmon-Luca`_
+
+
+.. _v2021.12.0:
+
 2021.12.0
 ---------
 
@@ -51,6 +557,8 @@ Maintenance
 - Unpin ``graphviz``  and improve package management in environment-3.7 (:pr:`8411`) `Julia Signell`_
 
 
+.. _v2021.11.2:
+
 2021.11.2
 ---------
 
@@ -72,6 +580,8 @@ Released on November 19, 2021
 - Import ``graphviz.Diagraph`` from top of module, not from ``dot`` (:pr:`8363`) `Julia Signell`_
 
 
+.. _v2021.11.1:
+
 2021.11.1
 ---------
 
@@ -79,6 +589,8 @@ Released on November 8, 2021
 
 Patch release to update ``distributed`` dependency to version ``2021.11.1``.
 
+
+.. _v2021.11.0:
 
 2021.11.0
 ---------
@@ -95,10 +607,10 @@ Released on November 5, 2021
 - Groupby Rolling (:pr:`8176`) `Julia Signell`_
 - Add more ordering diagnostics to ``dask.visualize`` (:pr:`7992`) `Erik Welch`_
 - Use ``HighLevelGraph`` optimizations for ``delayed`` (:pr:`8316`) `Ian Rose`_
-- ``demo_tuples`` produces malformed ``HighLevelGraph`` (:pr:`8325`) `Guido Imperiale`_
+- ``demo_tuples`` produces malformed ``HighLevelGraph`` (:pr:`8325`) `crusaderky`_
 - Dask calendar should show events in local time (:pr:`8312`) `Genevieve Buckley`_
-- Fix flaky ``test_interrupt`` (:pr:`8314`) `Guido Imperiale`_
-- Deprecate ``AxisError`` (:pr:`8305`) `Guido Imperiale`_
+- Fix flaky ``test_interrupt`` (:pr:`8314`) `crusaderky`_
+- Deprecate ``AxisError`` (:pr:`8305`) `crusaderky`_
 - Fix name of cuDF in extension documentation. (:pr:`8311`) `Vyas Ramasubramani`_
 - Add single eq operator (=) to parquet filters  (:pr:`8300`) `Ayush Dattagupta`_
 - Improve support for Spark output in ``read_parquet`` (:pr:`8274`) `Richard (Rick) Zamora`_
@@ -110,12 +622,14 @@ Released on November 5, 2021
 - Deprecate ``file_path`` and make it possible to save  from within a notebook (:pr:`8283`) `Julia Signell`_
 
 
+.. _v2021.10.0:
+
 2021.10.0
 ---------
 
 Released on October 22, 2021
 
-- ``da.store`` to create well-formed ``HighLevelGraph`` (:pr:`8261`) `Guido Imperiale`_
+- ``da.store`` to create well-formed ``HighLevelGraph`` (:pr:`8261`) `crusaderky`_
 - CI: force nightly ``pyarrow`` in the upstream build (:pr:`8281`) `Joris Van den Bossche`_
 - Remove ``chest`` (:pr:`8279`) `James Bourbeau`_
 - Skip doctests if optional dependencies are not installed (:pr:`8258`) `Genevieve Buckley`_
@@ -137,7 +651,7 @@ Released on October 22, 2021
 - Fix ``debugging.html`` redirect (:pr:`8251`) `James Bourbeau`_
 - Fix null sorting for single partition dataframes (:pr:`8225`) `Charles Blackmon-Luca`_
 - Fix ``setup.html`` redirect (:pr:`8249`) `Florian Jetter`_
-- Run ``pyupgrade`` in CI (:pr:`8246`) `Guido Imperiale`_
+- Run ``pyupgrade`` in CI (:pr:`8246`) `crusaderky`_
 - Fix label typo in upstream CI build (:pr:`8237`) `James Bourbeau`_
 - Add support for "dependent" columns in DataFrame.assign (:pr:`8086`) `Suriya Senthilkumar`_
 - add NumPy array of Dask keys to ``Array`` (:pr:`7922`) `Davis Bennett`_
@@ -175,6 +689,8 @@ Released on October 22, 2021
 - Include divisions when doing ``Index.to_series`` (:pr:`8165`) `Julia Signell`_
 
 
+.. _v2021.09.1:
+
 2021.09.1
 ---------
 
@@ -201,6 +717,8 @@ Released on September 21, 2021
 - Deprecate ``boundary_slice`` kwarg: ``kind`` for pandas compat (:pr:`8037`) `Julia Signell`_
 
 
+.. _v2021.09.0:
+
 2021.09.0
 ---------
 
@@ -218,7 +736,7 @@ Released on September 3, 2021
 - Un-xfail ``sparse`` tests for 0.13.0 release (:pr:`8102`) `James Bourbeau`_
 - Add axes property to DataFrame and Series (:pr:`8069`) `Jordan Jensen`_
 - Add CuPy support in ``da.unique`` (values only) (:pr:`8021`) `Peter Andreas Entschev`_
-- Unit tests for ``sparse.zeros_like`` (xfailed) (:pr:`8093`) `Guido Imperiale`_
+- Unit tests for ``sparse.zeros_like`` (xfailed) (:pr:`8093`) `crusaderky`_
 - Add explicit ``like`` kwarg support to array creation functions (:pr:`8054`) `Peter Andreas Entschev`_
 - Separate Array and DataFrame mindeps builds (:pr:`8079`) `James Bourbeau`_
 - Fork out ``percentile_dispatch`` to ``dask.array`` (:pr:`8083`) `GALI PREM SAGAR`_
@@ -227,6 +745,8 @@ Released on September 3, 2021
 - Add ``DataFrame.shuffle`` to API docs (:pr:`8076`) `Martin Fleischmann`_
 - Order requirements alphabetically (:pr:`8073`) `John A Kirkham`_
 
+
+.. _v2021.08.1:
 
 2021.08.1
 ---------
@@ -254,6 +774,8 @@ Released on August 20, 2021
 - Fix ``blocksize`` description formatting in ``read_pandas`` (:pr:`8047`) `Louis Maddox`_
 - Fix "point" -> "pointers" typo in docs (:pr:`8043`) `David Chudzicki`_
 
+
+.. _v2021.08.0:
 
 2021.08.0
 ---------
@@ -292,6 +814,8 @@ Released on August 13, 2021
 - Require NumPy 1.18+ & Pandas 1.0+ (:pr:`7939`) `John A Kirkham`_
 
 
+.. _v2021.07.2:
+
 2021.07.2
 ---------
 
@@ -318,6 +842,8 @@ Released on July 30, 2021
 - Unpin fastparquet in CI (:pr:`7928`) `James Bourbeau`_
 - Remove skips from doctests (3 of 6) (:pr:`7872`) `Zhengnan Zhao`_
 
+
+.. _v2021.07.1:
 
 2021.07.1
 ---------
@@ -350,6 +876,8 @@ Released on July 23, 2021
 - Handle infinite loops in ``merge_asof`` (:pr:`7842`) `gerrymanoim`_
 
 
+.. _v2021.07.0:
+
 2021.07.0
 ---------
 
@@ -379,6 +907,8 @@ Released on July 9, 2021
 - Make ``PY_VERSION`` private (:pr:`7824`) `James Bourbeau`_
 
 
+.. _v2021.06.2:
+
 2021.06.2
 ---------
 
@@ -388,6 +918,8 @@ Released on June 22, 2021
 - Make ``check_meta`` understand pandas dtypes better (:pr:`7813`) `Julia Signell`_
 - Remove "Educational Resources" doc page (:pr:`7818`) `James Bourbeau`_
 
+
+.. _v2021.06.1:
 
 2021.06.1
 ---------
@@ -433,6 +965,8 @@ Released on June 18, 2021
 - Fix HDFS tests (:pr:`7752`) `Julia Signell`_
 
 
+.. _v2021.06.0:
+
 2021.06.0
 ---------
 
@@ -456,6 +990,8 @@ Released on June 4, 2021
 - Automatically show graph visualization in Jupyter notebooks (:pr:`7716`) `Genevieve Buckley`_
 - Add ``autofunction`` for ``unify_chunks`` in API docs (:pr:`7730`) `James Bourbeau`_
 
+
+.. _v2021.05.1:
 
 2021.05.1
 ---------
@@ -490,6 +1026,8 @@ Released on May 28, 2021
 - Fix spelling in Series ``getitem`` error message (:pr:`7659`) `Maisie Marshall`_
 
 
+.. _v2021.05.0:
+
 2021.05.0
 ---------
 
@@ -520,6 +1058,8 @@ Released on May 14, 2021
 - Update distributed version in mindep CI build (:pr:`7602`) `James Bourbeau`_
 - Support all or no overlap between partition columns and real columns (:pr:`7541`) `Richard (Rick) Zamora`_
 
+
+.. _v2021.04.1:
 
 2021.04.1
 ---------
@@ -561,6 +1101,8 @@ Released on April 23, 2021
 - Add ``check_type`` to array ``assert_eq`` (:pr:`7491`) `Julia Signell`_
 
 
+.. _v2021.04.0:
+
 2021.04.0
 ---------
 
@@ -573,12 +1115,14 @@ Released on April 2, 2021
 - Only provide installation instructions when distributed is missing (:pr:`7498`) `Matthew Rocklin`_
 - Start adding ``isort`` (:pr:`7370`) `Julia Signell`_
 - Add ``ignore_order`` parameter in ``dd.concat`` (:pr:`7473`) `Daniel Mesejo-León`_
-- Use powers-of-two when displaying RAM (:pr:`7484`) `Guido Imperiale`_
+- Use powers-of-two when displaying RAM (:pr:`7484`) `crusaderky`_
 - Added License Classifier (:pr:`7485`) `Tom Augspurger`_
-- Replace conda with mamba (:pr:`7227`) `Guido Imperiale`_
+- Replace conda with mamba (:pr:`7227`) `crusaderky`_
 - Fix typo in array docs (:pr:`7478`) `James Lamb`_
 - Use ``concurrent.futures`` in local scheduler (:pr:`6322`) `John A Kirkham`_
 
+
+.. _v2021.03.1:
 
 2021.03.1
 ---------
@@ -593,7 +1137,7 @@ Released on March 26, 2021
 - Fix bug in repartition with freq (:pr:`7357`) `Ruben van de Geer`_
 - Fix ``__array_function__`` dispatching for ``tril``/``triu`` (:pr:`7457`) `Peter Andreas Entschev`_
 - Use ``concurrent.futures.Executors`` in a few tests (:pr:`7429`) `John A Kirkham`_
-- Require NumPy >=1.16 (:pr:`7383`) `Guido Imperiale`_
+- Require NumPy >=1.16 (:pr:`7383`) `crusaderky`_
 - Minor ``sort_values`` housekeeping (:pr:`7462`) `Ryan Williams`_
 - Ensure natural sort order in parquet part paths (:pr:`7249`) `Ryan Williams`_
 - Remove global env mutation upon running ``test_config.py`` (:pr:`7464`) `Hristo Georgiev`_
@@ -648,6 +1192,8 @@ Released on March 26, 2021
 - Move NumPy skip into test (:pr:`7247`) `Julia Signell`_
 
 
+.. _v2021.03.0:
+
 2021.03.0
 ---------
 
@@ -661,19 +1207,19 @@ Released on March 5, 2021
 - Bump minimum version of ``distributed`` (:pr:`7328`) `James Bourbeau`_
 - Fix ``percentiles_summary`` with ``dask_cudf`` (:pr:`7325`) `Peter Andreas Entschev`_
 - Temporarily revert recent ``Array.__setitem__`` updates (:pr:`7326`) `James Bourbeau`_
-- ``Blockwise.clone`` (:pr:`7312`) `Guido Imperiale`_
+- ``Blockwise.clone`` (:pr:`7312`) `crusaderky`_
 - NEP-35 duck array update (:pr:`7321`) `James Bourbeau`_
 - Don't allow setting ``.name`` for array (:pr:`7222`) `Julia Signell`_
 - Use nearest interpolation for creating percentiles of integer input (:pr:`7305`) `Kyle Barron`_
 - Test ``exp`` with CuPy arrays (:pr:`7322`) `John A Kirkham`_
 - Check that computed chunks have right size and dtype (:pr:`7277`) `Bruce Merry`_
-- ``pytest.mark.flaky`` (:pr:`7319`) `Guido Imperiale`_
+- ``pytest.mark.flaky`` (:pr:`7319`) `crusaderky`_
 - Contributing docs: add note to pull the latest git tags before pip installing Dask (:pr:`7308`) `Genevieve Buckley`_
-- Support for Python 3.9 (:pr:`7289`) `Guido Imperiale`_
+- Support for Python 3.9 (:pr:`7289`) `crusaderky`_
 - Add broadcast-based merge implementation (:pr:`7143`) `Richard (Rick) Zamora`_
-- Add ``split_every`` to ``graph_manipulation`` (:pr:`7282`) `Guido Imperiale`_
+- Add ``split_every`` to ``graph_manipulation`` (:pr:`7282`) `crusaderky`_
 - Typo in optimize docs (:pr:`7306`) `Julius Busecke`_
-- ``dask.graph_manipulation`` support for ``xarray.Dataset`` (:pr:`7276`) `Guido Imperiale`_
+- ``dask.graph_manipulation`` support for ``xarray.Dataset`` (:pr:`7276`) `crusaderky`_
 - Add plot width and height support for Bokeh 2.3.0 (:pr:`7297`) `James Bourbeau`_
 - Add NumPy functions ``tri``, ``triu_indices``, ``triu_indices_from``, ``tril_indices``, ``tril_indices_from`` (:pr:`6997`) `Illviljan`_
 - Remove "cleanup" task in DataFrame on-disk shuffle (:pr:`7260`) `Sinclair Target`_
@@ -686,32 +1232,34 @@ Released on March 5, 2021
 - Improve documentation of ``name`` in ``from_array`` (:pr:`7264`) `Bruce Merry`_
 - Fix ``cumsum`` for empty partitions (:pr:`7230`) `Julia Signell`_
 - Add ``map_blocks`` example to dask array creation docs (:pr:`7221`) `Julia Signell`_
-- Fix performance issue in ``dask.graph_manipulation.wait_on()`` (:pr:`7258`) `Guido Imperiale`_
-- Replace coveralls with codecov.io (:pr:`7246`) `Guido Imperiale`_
+- Fix performance issue in ``dask.graph_manipulation.wait_on()`` (:pr:`7258`) `crusaderky`_
+- Replace coveralls with codecov.io (:pr:`7246`) `crusaderky`_
 - Pin to a particular ``black`` rev in pre-commit (:pr:`7256`) `Julia Signell`_
 - Minor typo in documentation: ``array-chunks.rst`` (:pr:`7254`) `Magnus Nord`_
 - Fix bugs in ``Blockwise`` and ``ShuffleLayer`` (:pr:`7213`) `Richard (Rick) Zamora`_
 - Fix parquet filtering bug for ``"pyarrow-dataset"`` with pyarrow-3.0.0 (:pr:`7200`) `Richard (Rick) Zamora`_
-- ``graph_manipulation`` without NumPy (:pr:`7243`) `Guido Imperiale`_
+- ``graph_manipulation`` without NumPy (:pr:`7243`) `crusaderky`_
 - Support for NEP-35 (:pr:`6738`) `Peter Andreas Entschev`_
 - Avoid running unit tests during doctest CI build (:pr:`7240`) `James Bourbeau`_
 - Run doctests on CI (:pr:`7238`) `Julia Signell`_
-- Cleanup code quality on set arithmetics (:pr:`7196`) `Guido Imperiale`_
+- Cleanup code quality on set arithmetics (:pr:`7196`) `crusaderky`_
 - Add ``dask.array.delete`` (:pr:`7125`) `Julia Signell`_
 - Unpin graphviz now that new conda-forge recipe is built (:pr:`7235`) `Julia Signell`_
-- Don't use NumPy 1.20 from conda-forge on Mac (:pr:`7211`) `Guido Imperiale`_
+- Don't use NumPy 1.20 from conda-forge on Mac (:pr:`7211`) `crusaderky`_
 - ``map_overlap``: Don't rechunk axes without overlap (:pr:`7233`) `Deepak Cherian`_
 - Pin graphviz to avoid issue with latest conda-forge build (:pr:`7232`) `Julia Signell`_
 - Use ``html_css_files`` in docs for custom CSS (:pr:`7220`) `James Bourbeau`_
-- Graph manipulation: ``clone``, ``bind``, ``checkpoint``, ``wait_on`` (:pr:`7109`) `Guido Imperiale`_
+- Graph manipulation: ``clone``, ``bind``, ``checkpoint``, ``wait_on`` (:pr:`7109`) `crusaderky`_
 - Fix handling of filter expressions in parquet ``pyarrow-dataset`` engine (:pr:`7186`) `Joris Van den Bossche`_
 - Extend ``__setitem__`` to more closely match numpy (:pr:`7033`) `David Hassell`_
-- Clean up Python 2 syntax (:pr:`7195`) `Guido Imperiale`_
-- Fix regression in ``Delayed._length`` (:pr:`7194`) `Guido Imperiale`_
-- ``__dask_layers__()`` tests and tweaks (:pr:`7177`) `Guido Imperiale`_
+- Clean up Python 2 syntax (:pr:`7195`) `crusaderky`_
+- Fix regression in ``Delayed._length`` (:pr:`7194`) `crusaderky`_
+- ``__dask_layers__()`` tests and tweaks (:pr:`7177`) `crusaderky`_
 - Properly convert ``HighLevelGraph`` in multiprocessing scheduler (:pr:`7191`) `Jim Crist-Harif`_
 - Don't fail fast in CI (:pr:`7188`) `James Bourbeau`_
 
+
+.. _v2021.02.0:
 
 2021.02.0
 ---------
@@ -722,9 +1270,9 @@ Released on February 5, 2021
 - Added support for ``Float64`` in column assignment (:pr:`7173`) `Nils Braun`_
 - Coarsen rechunking error (:pr:`7127`) `Davis Bennett`_
 - Fix upstream CI tests (:pr:`6896`) `Julia Signell`_
-- Revise ``HighLevelGraph`` Mapping API (:pr:`7160`) `Guido Imperiale`_
+- Revise ``HighLevelGraph`` Mapping API (:pr:`7160`) `crusaderky`_
 - Update low-level graph spec to use any hashable for keys (:pr:`7163`) `James Bourbeau`_
-- Generically rebuild a collection with different keys (:pr:`7142`) `Guido Imperiale`_
+- Generically rebuild a collection with different keys (:pr:`7142`) `crusaderky`_
 - Make easier to link issues in PRs (:pr:`7130`) `Ray Bell`_
 - Add ``dask.array.append`` (:pr:`7146`) `D-Stacks`_
 - Allow ``dask.array.ravel`` to accept ``array_like`` argument (:pr:`7138`) `D-Stacks`_
@@ -740,6 +1288,8 @@ Released on February 5, 2021
 - Add cytoolz back to CI environment (:pr:`7103`) `James Bourbeau`_
 
 
+.. _v2021.01.1:
+
 2021.01.1
 ---------
 
@@ -753,6 +1303,8 @@ Released on January 22, 2021
 - Add error messages to ``assert_eq()`` (:pr:`7083`) `James Lamb`_
 - Make cached properties read-only (:pr:`7077`) `Illviljan`_
 
+
+.. _v2021.01.0:
 
 2021.01.0
 ---------
@@ -805,6 +1357,8 @@ Released on January 15, 2021
 - Update ``from_pandas`` docstring (:pr:`6957`) `Richard (Rick) Zamora`_
 - Prevent ``fuse_roots`` from clobbering annotations (:pr:`6955`) `Simon Perkins`_
 
+
+.. _v2020.12.0:
 
 2020.12.0
 ---------
@@ -934,6 +1488,8 @@ All changes
 - Update ``dask-sphinx-theme`` version (:pr:`6700`) `Gil Forsyth`_
 
 
+.. _v2.30.0 / 2020-10-06:
+
 2.30.0 / 2020-10-06
 -------------------
 
@@ -942,6 +1498,8 @@ Array
 
 - Allow ``rechunk`` to evenly split into N chunks (:pr:`6420`) `Scott Sievert`_
 
+
+.. _v2.29.0 / 2020-10-02:
 
 2.29.0 / 2020-10-02
 -------------------
@@ -978,6 +1536,8 @@ Documentation
 - Fix a few typos (:pr:`6678`) `Pav A`_
 
 
+.. _v2.28.0 / 2020-09-25:
+
 2.28.0 / 2020-09-25
 -------------------
 
@@ -1010,6 +1570,8 @@ DataFrame
 - Slightly better error message (:pr:`6657`) `Julia Signell`_
 
 
+.. _v2.27.0 / 2020-09-18:
+
 2.27.0 / 2020-09-18
 -------------------
 
@@ -1040,6 +1602,8 @@ Documentation
 - Add a number of missing ufuncs to ``dask.array`` docs (:pr:`6642`) `Ralf Gommers`_
 - Add ``HelmCluster`` docs (:pr:`6290`) `Jacob Tomlinson`_
 
+
+.. _v2.26.0 / 2020-09-11:
 
 2.26.0 / 2020-09-11
 -------------------
@@ -1086,6 +1650,8 @@ Documentation
 - Document dask/daskhub helm chart (:pr:`6560`) `Tom Augspurger`_
 
 
+.. _v2.25.0 / 2020-08-28:
+
 2.25.0 / 2020-08-28
 -------------------
 
@@ -1108,6 +1674,8 @@ Documentation
 - Update ``kubernetes-helm.rst`` (:pr:`6523`) `David Sheldon`_
 - Stop 2020 survey (:pr:`6547`) `Tom Augspurger`_
 
+
+.. _v2.24.0 / 2020-08-22:
 
 2.24.0 / 2020-08-22
 -------------------
@@ -1136,6 +1704,8 @@ Core
 -   Move key_split() from optimization.py to utils.py (:pr:`6529`) `Mads R. B. Kristensen`_
 -   Make tests run on moto server (:pr:`6528`) `Martin Durant`_
 
+
+.. _v2.23.0 / 2020-08-14:
 
 2.23.0 / 2020-08-14
 -------------------
@@ -1177,6 +1747,8 @@ Documentation
 - Docs for SQLing (:pr:`6453`) `Martin Durant`_
 
 
+.. _v2.22.0 / 2020-07-31:
+
 2.22.0 / 2020-07-31
 -------------------
 
@@ -1213,6 +1785,8 @@ Documentation
 - Complete parameter server implementation in docs (:pr:`6449`) `Scott Sievert`_
 - Fix typo (:pr:`6436`) `Jack Xiaosong Xu`_
 
+
+.. _v2.21.0 / 2020-07-17:
 
 2.21.0 / 2020-07-17
 -------------------
@@ -1252,6 +1826,8 @@ Documentation
 - Update ``visualize`` docstrings (:pr:`6383`) `Zhengnan Zhao`_
 
 
+.. _v2.20.0 / 2020-07-02:
+
 2.20.0 / 2020-07-02
 -------------------
 
@@ -1275,6 +1851,8 @@ Documentation
 
 - Add doc describing argument (:pr:`6318`) `asmith26`_
 
+
+.. _v2.19.0 / 2020-06-19:
 
 2.19.0 / 2020-06-19
 -------------------
@@ -1308,6 +1886,8 @@ Documentation
 - Update ``bag.rst`` (:pr:`6317`) `Ben Shaver`_
 
 
+.. _v2.18.1 / 2020-06-09:
+
 2.18.1 / 2020-06-09
 -------------------
 
@@ -1329,6 +1909,8 @@ Documentation
 - Now readthedocs builds unrelased features' docstrings (:pr:`6295`) `Antonio Ercole De Luca`_
 - Add ``asyncssh`` intersphinx mappings (:pr:`6298`) `Jacob Tomlinson`_
 
+
+.. _v2.18.0 / 2020-06-05:
 
 2.18.0 / 2020-06-05
 -------------------
@@ -1362,6 +1944,8 @@ Documentation
 - Update remote data section (:pr:`6258`) `Ray Bell`_
 
 
+.. _v2.17.2 / 2020-05-28:
+
 2.17.2 / 2020-05-28
 -------------------
 
@@ -1375,6 +1959,8 @@ DataFrame
 
 - Raise error if ``resample`` isn't going to give right answer (:pr:`6244`) `Julia Signell`_
 
+
+.. _v2.17.1 / 2020-05-28:
 
 2.17.1 / 2020-05-28
 -------------------
@@ -1399,6 +1985,8 @@ DataFrame
 - Generalize ``describe`` & ``quantile`` apis (:pr:`5137`) `GALI PREM SAGAR`_
 
 
+.. _v2.17.0 / 2020-05-26:
+
 2.17.0 / 2020-05-26
 -------------------
 
@@ -1419,7 +2007,7 @@ Core
 
 - Raise warning ``delayed.visualise()`` (:pr:`6216`) `Amol Umbarkar`_
 - Ensure other pickle arguments work (:pr:`6229`) `John A Kirkham`_
-- Overhaul ``fuse()`` config (:pr:`6198`) `Guido Imperiale`_
+- Overhaul ``fuse()`` config (:pr:`6198`) `crusaderky`_
 - Update ``dask.order.order`` to consider "next" nodes using both FIFO and LIFO (:pr:`5872`) `Erik Welch`_
 
 DataFrame
@@ -1447,6 +2035,8 @@ Documentation
 - Added documentation for ``distributed.Event`` class (:pr:`6231`) `Nils Braun`_
 - Doc write to remote (:pr:`6124`) `Ray Bell`_
 
+
+.. _v2.16.0 / 2020-05-08:
 
 2.16.0 / 2020-05-08
 -------------------
@@ -1486,6 +2076,8 @@ Documentation
 - Fix indent (:pr:`6147`) `Martin Durant`_
 - Add Tom's log config example (:pr:`6143`) `Martin Durant`_
 
+
+.. _v2.15.0 / 2020-04-24:
 
 2.15.0 / 2020-04-24
 -------------------
@@ -1531,6 +2123,8 @@ Documentation
 - Add section about ``Semaphore`` in distributed (:pr:`6053`) `Florian Jetter`_
 
 
+.. _v2.14.0 / 2020-04-03:
+
 2.14.0 / 2020-04-03
 -------------------
 
@@ -1556,6 +2150,8 @@ Documentation
 
 - DOC: Add name caveats (:pr:`6040`) `Tom Augspurger`_
 
+
+.. _v2.13.0 / 2020-03-25:
 
 2.13.0 / 2020-03-25
 -------------------
@@ -1597,6 +2193,8 @@ Documentation
 - Update task graphs in optimize docs (:pr:`5928`) `Julia Signell`_
 - Optionally get rid of intermediary boxes in visualize, and add more labels (:pr:`5976`) `Julia Signell`_
 
+
+.. _v2.12.0 / 2020-03-06:
 
 2.12.0 / 2020-03-06
 -------------------
@@ -1645,6 +2243,8 @@ Documentation
 - Add collect list example (:pr:`5938`) `Ray Bell`_
 - Update optimization doc for python 3 (:pr:`5926`) `Julia Signell`_
 
+
+.. _v2.11.0 / 2020-02-19:
 
 2.11.0 / 2020-02-19
 -------------------
@@ -1706,12 +2306,16 @@ Documentation
 - Add note pointing to code of conduct and diversity statement (:pr:`5844`) `Matthew Rocklin`_
 
 
+.. _v2.10.1 / 2020-01-30:
+
 2.10.1 / 2020-01-30
 -------------------
 
 - Fix Pandas 1.0 version comparison (:pr:`5851`) `Tom Augspurger`_
 - Fix typo in distributed diagnostics documentation (:pr:`5841`) `Gerrit Holl`_
 
+
+.. _v2.10.0 / 2020-01-28:
 
 2.10.0 / 2020-01-28
 -------------------
@@ -1725,6 +2329,8 @@ Documentation
 - Use parquet dataset statistics in more cases with the ``pyarrow`` engine (:pr:`5799`) `Richard J Zamora`_
 - Fixed exception in ``groupby.std()`` when some of the keys were large integers (:pr:`5737`) `H. Thomson Comer`_
 
+
+.. _v2.9.2 / 2020-01-16:
 
 2.9.2 / 2020-01-16
 ------------------
@@ -1766,6 +2372,8 @@ Documentation
 - Add docs section on task expectations to graph page (:pr:`5764`) `Devin Petersohn`_
 
 
+.. _v2.9.1 / 2019-12-27:
+
 2.9.1 / 2019-12-27
 ------------------
 
@@ -1806,6 +2414,8 @@ Documentation
 -  Update numpydoc dependency (:pr:`5694`) `James Bourbeau`_
 
 
+.. _v2.9.0 / 2019-12-06:
+
 2.9.0 / 2019-12-06
 ------------------
 
@@ -1836,6 +2446,8 @@ Documentation
 - Add documentation build (:pr:`5617`) `James Bourbeau`_
 
 
+.. _v2.8.1 / 2019-11-22:
+
 2.8.1 / 2019-11-22
 ------------------
 
@@ -1863,6 +2475,8 @@ Documentation
 - Removes ``html_extra_path`` (:pr:`5614`) `James Bourbeau`_
 - Fixed See Also referencence (:pr:`5612`) `Tom Augspurger`_
 
+
+.. _v2.8.0 / 2019-11-14:
 
 2.8.0 / 2019-11-14
 ------------------
@@ -1901,6 +2515,8 @@ Documentation
 -  Update calendar link (:pr:`5569`) `Tom Augspurger`_
 
 
+.. _v2.7.0 / 2019-11-08:
+
 2.7.0 / 2019-11-08
 ------------------
 
@@ -1928,7 +2544,7 @@ Core
 -  Update test_imports.sh (:pr:`5534`) `James Bourbeau`_
 -  Support cgroups limits on cpu count in multiprocess and threaded schedulers (:pr:`5499`) `Albert DeFusco`_
 -  Update minimum pyarrow version on CI (:pr:`5562`) `James Bourbeau`_
--  Make cloudpickle optional (:pr:`5511`) `Guido Imperiale`_
+-  Make cloudpickle optional (:pr:`5511`) `crusaderky`_
 
 DataFrame
 ^^^^^^^^^
@@ -1955,6 +2571,8 @@ Documentation
 -  Fix typo in read_sql_table (:pr:`5554`) `Eric Dill`_
 -  Add adaptive deployments screencast [skip ci] (:pr:`5566`) `Matthew Rocklin`_
 
+
+.. _v2.6.0 / 2019-10-15:
 
 2.6.0 / 2019-10-15
 ------------------
@@ -1987,6 +2605,8 @@ Documentation
 - Fix typos in docstrings (:pr:`5469`) `garanews`_
 
 
+.. _v2.5.2 / 2019-10-04:
+
 2.5.2 / 2019-10-04
 ------------------
 
@@ -2008,6 +2628,8 @@ Documentation
 -  Add latest presentations (:pr:`5446`) `Javad`_
 -  Update cloud documentation (:pr:`5444`) `Matthew Rocklin`_
 
+
+.. _v2.5.0 / 2019-09-27:
 
 2.5.0 / 2019-09-27
 ------------------
@@ -2038,6 +2660,8 @@ Documentation
 -  Fix delimeter parsing documentation (:pr:`5428`) `Mahmut Bulut`_
 -  Update overview image (:pr:`5404`) `James Bourbeau`_
 
+
+.. _v2.4.0 / 2019-09-13:
 
 2.4.0 / 2019-09-13
 ------------------
@@ -2098,6 +2722,8 @@ Documentation
 - Fixed small typo with parentheses placement (:pr:`5311`) `Eugene Huang`_
 - Update link in reshape docstring (:pr:`5297`) `James Bourbeau`_
 
+
+.. _v2.3.0 / 2019-08-16:
 
 2.3.0 / 2019-08-16
 ------------------
@@ -2169,6 +2795,8 @@ Documentation
 - Update GUFunc documentation (:pr:`5232`) `Matthew Rocklin`_
 
 
+.. _v2.2.0 / 2019-08-01:
+
 2.2.0 / 2019-08-01
 ------------------
 
@@ -2231,6 +2859,8 @@ Documentation
 
 
 
+.. _v2.1.0 / 2019-07-08:
+
 2.1.0 / 2019-07-08
 ------------------
 
@@ -2278,6 +2908,8 @@ Documentation
 - Fixes typo in optimization docs (:pr:`5015`) `James Bourbeau`_
 - Update community meeting information (:pr:`5006`) `Tom Augspurger`_
 
+
+.. _v2.0.0 / 2019-06-25:
 
 2.0.0 / 2019-06-25
 ------------------
@@ -2397,6 +3029,8 @@ Documentation
 -  Add "Avoid Large Partitions" section to best practices (:pr:`4808`) `Matthew Rocklin`_
 -  Update URL for joblib to new website hosting their doc (:pr:`4816`) `Christian Hudon`_
 
+.. _v1.2.2 / 2019-05-08:
+
 1.2.2 / 2019-05-08
 ------------------
 
@@ -2448,6 +3082,8 @@ Documentation
 - Update optimization docs now that cull is not automatic (:pr:`4752`) `Matthew Rocklin`_
 
 
+.. _v1.2.1 / 2019-04-29:
+
 1.2.1 / 2019-04-29
 ------------------
 
@@ -2495,6 +3131,8 @@ Documentation
 -   Fix minor typo fix in a Queue/fire_and_forget example (:pr:`4709`) `Matthew Rocklin`_
 -   Update from_pandas docstring to match signature (:pr:`4698`) `James Bourbeau`_
 
+.. _v1.2.0 / 2019-04-12:
+
 1.2.0 / 2019-04-12
 ------------------
 
@@ -2532,6 +3170,8 @@ Documentation
 
 -  Add delayed extra dependencies to install docs (:pr:`4660`) `James Bourbeau`_
 
+
+.. _v1.1.5 / 2019-03-29:
 
 1.1.5 / 2019-03-29
 ------------------
@@ -2581,6 +3221,8 @@ Documentation
 -  Update and secure several references (:pr:`4649`) `Søren Fuglede Jørgensen`_
 
 
+.. _v1.1.4 / 2019-03-08:
+
 1.1.4 / 2019-03-08
 ------------------
 
@@ -2614,6 +3256,8 @@ Documentation
 -  Fix typo in docstring (:pr:`4572`) `Shyam Saladi`_
 
 
+.. _v1.1.3 / 2019-03-01:
+
 1.1.3 / 2019-03-01
 ------------------
 
@@ -2637,6 +3281,8 @@ Documentation
 
 -  Add missing method to documentation index (:pr:`4528`) `Bart Broere`_
 
+
+.. _v1.1.2 / 2019-02-25:
 
 1.1.2 / 2019-02-25
 ------------------
@@ -2692,6 +3338,8 @@ Core
 -  Repeat optimize_blockwise for diamond fusion (:pr:`4492`) `Matthew Rocklin`_
 
 
+.. _v1.1.1 / 2019-01-31:
+
 1.1.1 / 2019-01-31
 ------------------
 
@@ -2728,6 +3376,8 @@ Core
 
 -  Work around psutil 5.5.0 not allowing pickling Process objects `Janne Vuorela`_
 
+
+.. _v1.1.0 / 2019-01-18:
 
 1.1.0 / 2019-01-18
 ------------------
@@ -2797,13 +3447,15 @@ Core
 -  Ignore non-readable config files (:pr:`4388`) `Jim Crist`_
 
 
+.. _v1.0.0 / 2018-11-28:
+
 1.0.0 / 2018-11-28
 ------------------
 
 Array
 ^^^^^
 
--  Add nancumsum/nancumprod unit tests (:pr:`4215`) `Guido Imperiale`_
+-  Add nancumsum/nancumprod unit tests (:pr:`4215`) `crusaderky`_
 
 DataFrame
 ^^^^^^^^^
@@ -2827,6 +3479,8 @@ Core
 -  Remove AUTHORS.md `Jim Crist`_
 
 
+.. _v0.20.2 / 2018-11-15:
+
 0.20.2 / 2018-11-15
 -------------------
 
@@ -2849,6 +3503,8 @@ Documentation
 -  Add stats module namespace (:pr:`4206`) `James Bourbeau`_
 -  Fix link in dataframe documentation (:pr:`4208`) `James Bourbeau`_
 
+
+.. _v0.20.1 / 2018-11-09:
 
 0.20.1 / 2018-11-09
 -------------------
@@ -2888,6 +3544,8 @@ Documentation
 -  Copy edit documentation (:pr:`4164`) (:pr:`4175`) (:pr:`4185`) (:pr:`4192`) (:pr:`4191`) (:pr:`4190`) (:pr:`4180`) `Miguel Farrajota`_
 -  Fix typo in docstring (:pr:`4183`) `Carlos Valiente`_
 
+
+.. _v0.20.0 / 2018-10-26:
 
 0.20.0 / 2018-10-26
 -------------------
@@ -2943,6 +3601,8 @@ Documentation
 
 
 
+.. _v0.19.4 / 2018-10-09:
+
 0.19.4 / 2018-10-09
 -------------------
 
@@ -2973,6 +3633,8 @@ Documentation
 -  Fix Typo on hpc example. (missing `=` in kwarg). (:pr:`4068`) `Matthias Bussonier`_
 -  Extensive copy-editing: (:pr:`4065`), (:pr:`4064`), (:pr:`4063`) `Miguel Farrajota`_
 
+
+.. _v0.19.3 / 2018-10-05:
 
 0.19.3 / 2018-10-05
 -------------------
@@ -3029,6 +3691,8 @@ Documentation
 -   Updates DataFrame.to_hdf docstring for returned values (:pr:`3992`) `James Bourbeau`_
 
 
+.. _v0.19.2 / 2018-09-17:
+
 0.19.2 / 2018-09-17
 -------------------
 
@@ -3054,6 +3718,8 @@ Documentation
 -  Use JupyterLab in Binder links from main page `Matthew Rocklin`_
 -  DOC: fixed sphinx syntax (:pr:`3960`) `Tom Augspurger`_
 
+
+.. _v0.19.1 / 2018-09-06:
 
 0.19.1 / 2018-09-06
 -------------------
@@ -3084,6 +3750,8 @@ Documentation
 -  Add try-now button to main landing page (:pr:`3924`) `Matthew Rocklin`_
 
 
+.. _v0.19.0 / 2018-08-29:
+
 0.19.0 / 2018-08-29
 -------------------
 
@@ -3091,7 +3759,7 @@ Array
 ^^^^^
 
 -  Support coordinate in gradient (:pr:`3949`) `Keisuke Fujii`_
--  Fix argtopk split_every bug (:pr:`3810`) `Guido Imperiale`_
+-  Fix argtopk split_every bug (:pr:`3810`) `crusaderky`_
 -  Ensure result computing dask.array.isnull() always gives a numpy array (:pr:`3825`) `Stephan Hoyer`_
 -  Support concatenate for scipy.sparse in dask array (:pr:`3836`) `Matthew Rocklin`_
 -  Fix argtopk on 32-bit systems. (:pr:`3823`) `Elliott Sales de Andrade`_
@@ -3151,13 +3819,15 @@ Docs
 -  Add missing ` to docstring (:pr:`3915`) `@rtobar`_
 
 
+.. _v0.18.2 / 2018-07-23:
+
 0.18.2 / 2018-07-23
 -------------------
 
 Array
 ^^^^^
 
-- Reimplemented ``argtopk`` to make it release the GIL (:pr:`3610`) `Guido Imperiale`_
+- Reimplemented ``argtopk`` to make it release the GIL (:pr:`3610`) `crusaderky`_
 - Don't overlap on non-overlapped dimensions in ``map_overlap`` (:pr:`3653`) `Matthew Rocklin`_
 - Fix ``linalg.tsqr`` for dimensions of uncertain length (:pr:`3662`) `Jeremy Chen`_
 - Break apart uneven array-of-int slicing to separate chunks (:pr:`3648`) `Matthew Rocklin`_
@@ -3165,9 +3835,9 @@ Array
 - Adds endpoint and retstep support for linspace (:pr:`3675`) `James Bourbeau`_
 - Implement ``.blocks`` accessor (:pr:`3689`) `Matthew Rocklin`_
 - Add ``block_info`` keyword to ``map_blocks`` functions (:pr:`3686`) `Matthew Rocklin`_
-- Slice by dask array of ints (:pr:`3407`) `Guido Imperiale`_
-- Support ``dtype`` in ``arange`` (:pr:`3722`) `Guido Imperiale`_
-- Fix ``argtopk`` with uneven chunks (:pr:`3720`) `Guido Imperiale`_
+- Slice by dask array of ints (:pr:`3407`) `crusaderky`_
+- Support ``dtype`` in ``arange`` (:pr:`3722`) `crusaderky`_
+- Fix ``argtopk`` with uneven chunks (:pr:`3720`) `crusaderky`_
 - Raise error when ``replace=False`` in ``da.choice`` (:pr:`3765`) `James Bourbeau`_
 - Update chunks in ``Array.__setitem__`` (:pr:`3767`) `Itamar Turner-Trauring`_
 - Add a ``chunksize`` convenience property (:pr:`3777`) `Jacob Tomlinson`_
@@ -3204,6 +3874,8 @@ Core
 - Add datasets module (:pr:`3780`) `Matthew Rocklin`_
 
 
+.. _v0.18.1 / 2018-06-22:
+
 0.18.1 / 2018-06-22
 -------------------
 
@@ -3212,7 +3884,7 @@ Array
 
 - ``from_array`` now supports scalar types and nested lists/tuples in input,
   just like all numpy functions do; it also produces a simpler graph when the
-  input is a plain ndarray (:pr:`3568`) `Guido Imperiale`_
+  input is a plain ndarray (:pr:`3568`) `crusaderky`_
 - Fix slicing of big arrays due to cumsum dtype bug (:pr:`3620`) `Marco Rossi`_
 - Add Dask Array implementation of pad (:pr:`3578`) `John A Kirkham`_
 - Fix array random API examples (:pr:`3625`) `James Bourbeau`_
@@ -3229,12 +3901,14 @@ DataFrame
 Core
 ^^^^
 
-- Minor tweaks to CI (:pr:`3629`) `Guido Imperiale`_
+- Minor tweaks to CI (:pr:`3629`) `crusaderky`_
 - Add back dask.utils.effective_get (:pr:`3642`) `Matthew Rocklin`_
 - DASK_CONFIG dictates config write location (:pr:`3621`) `Jim Crist`_
 - Replace 'collections' key in unpack_collections with unique key (:pr:`3632`) `Yu Feng`_
 - Avoid deepcopy in dask.config.set (:pr:`3649`) `Matthew Rocklin`_
 
+
+.. _v0.18.0 / 2018-06-14:
 
 0.18.0 / 2018-06-14
 -------------------
@@ -3260,7 +3934,7 @@ Array
 - Disable locking in to_zarr (needed for using to_zarr in a distributed context) (:pr:`3607`) `John A Kirkham`_
 - Support Zarr Arrays in `to_zarr`/`from_zarr` (:pr:`3561`) `John A Kirkham`_
 - Added recursion to array/linalg/tsqr to better manage the single core bottleneck (:pr:`3586`) `Jeremy Chan`_
-  (:pr:`3396`) `Guido Imperiale`_
+  (:pr:`3396`) `crusaderky`_
 
 Dataframe
 ^^^^^^^^^
@@ -3300,6 +3974,8 @@ Core
 - Remove "da.random" from random array keys (:pr:`3604`) `Matthew Rocklin`_
 
 
+.. _v0.17.5 / 2018-05-16:
+
 0.17.5 / 2018-05-16
 -------------------
 
@@ -3307,7 +3983,7 @@ Array
 ^^^^^
 
 - Fix ``rechunk`` with chunksize of -1 in a dict (:pr:`3469`) `Stephan Hoyer`_
-- ``einsum`` now accepts the ``split_every`` parameter (:pr:`3471`) `Guido Imperiale`_
+- ``einsum`` now accepts the ``split_every`` parameter (:pr:`3471`) `crusaderky`_
 - Improved slicing performance (:pr:`3479`) `Yu Feng`_
 
 DataFrame
@@ -3315,6 +3991,8 @@ DataFrame
 
 - Compatibility with pandas 0.23.0 (:pr:`3499`) `Tom Augspurger`_
 
+
+.. _v0.17.4 / 2018-05-03:
 
 0.17.4 / 2018-05-03
 -------------------
@@ -3328,6 +4006,8 @@ Dataframe
 - Switches to using dask.compat string_types (:pr:`3462`) `James Bourbeau`_
 
 
+.. _v0.17.3 / 2018-05-02:
+
 0.17.3 / 2018-05-02
 -------------------
 
@@ -3340,10 +4020,10 @@ Array
 - Add ``isin`` for dask arrays (:pr:`3363`). `Stephan Hoyer`_
 - Overhauled ``topk`` for Dask Arrays: faster algorithm, particularly for large k's; added support
   for multiple axes, recursive aggregation, and an option to pick the bottom k elements instead.
-  (:pr:`3395`) `Guido Imperiale`_
+  (:pr:`3395`) `crusaderky`_
 - The ``topk`` API has changed from topk(k, array) to the more conventional topk(array, k).
-  The legacy API still works but is now deprecated. (:pr:`2965`) `Guido Imperiale`_
-- New function ``argtopk`` for Dask Arrays (:pr:`3396`) `Guido Imperiale`_
+  The legacy API still works but is now deprecated. (:pr:`2965`) `crusaderky`_
+- New function ``argtopk`` for Dask Arrays (:pr:`3396`) `crusaderky`_
 - Fix handling partial depth and boundary in ``map_overlap`` (:pr:`3445`) `John A Kirkham`_
 - Add ``gradient`` for Dask Arrays (:pr:`3434`) `John A Kirkham`_
 
@@ -3370,6 +4050,8 @@ Core
 - Support traversing collections in persist, visualize, and optimize (:pr:`3410`) `Jim Crist`_
 - Add schedule= keyword to compute and persist.  This replaces common use of the get= keyword (:pr:`3448`) `Matthew Rocklin`_
 
+
+.. _v0.17.2 / 2018-03-21:
 
 0.17.2 / 2018-03-21
 -------------------
@@ -3405,6 +4087,8 @@ Core
 - Avoid sorting tasks in order when the number of tasks is very large (:pr:`3298`) `Matthew Rocklin`_
 
 
+.. _v0.17.1 / 2018-02-22:
+
 0.17.1 / 2018-02-22
 -------------------
 
@@ -3428,6 +4112,8 @@ Core
 - Use more recent LZ4 API (:pr:`3157`) `Thrasibule`_
 - Introduce output stream parameter for progress bar (:pr:`3185`) `Dieter Weber`_
 
+
+.. _v0.17.0 / 2018-02-09:
 
 0.17.0 / 2018-02-09
 -------------------
@@ -3481,6 +4167,8 @@ Core
 - Remove write_bytes (:pr:`3116`) `Jim Crist`_
 
 
+.. _v0.16.1 / 2018-01-09:
+
 0.16.1 / 2018-01-09
 -------------------
 
@@ -3526,6 +4214,8 @@ Core
 - Improve 32-bit compatibility (:pr:`2937`) `Matthew Rocklin`_
 - Change task prioritization to avoid upwards branching (:pr:`3017`) `Matthew Rocklin`_
 
+
+.. _v0.16.0 / 2017-11-17:
 
 0.16.0 / 2017-11-17
 -------------------
@@ -3586,6 +4276,8 @@ Core
 -  Wrap Dask filesystems for PyArrow compatibility (:pr:`2881`) `Jim Crist`_
 
 
+.. _v0.15.4 / 2017-10-06:
+
 0.15.4 / 2017-10-06
 -------------------
 
@@ -3617,6 +4309,8 @@ Core
 
 -  Drop s3fs from ``pip install dask[complete]`` (:pr:`2750`)
 
+
+.. _v0.15.3 / 2017-09-24:
 
 0.15.3 / 2017-09-24
 -------------------
@@ -3655,6 +4349,8 @@ Core
 -  Remove resize tool in Bokeh plots (:pr:`2688`)
 
 
+.. _v0.15.2 / 2017-08-25:
+
 0.15.2 / 2017-08-25
 -------------------
 
@@ -3692,6 +4388,8 @@ Core
 
 -  Remove bare ``except:`` blocks everywhere (:pr:`2590`)
 
+.. _v0.15.1 / 2017-07-08:
+
 0.15.1 / 2017-07-08
 -------------------
 
@@ -3701,6 +4399,8 @@ Core
 -  Import star in dask.distributed (:pr:`2503`)
 -  Threadsafe cache handling with tokenization (:pr:`2511`)
 
+
+.. _v0.15.0 / 2017-06-09:
 
 0.15.0 / 2017-06-09
 -------------------
@@ -3737,6 +4437,8 @@ Core
 -  Support pathlib.Path objects as uris  (:pr:`2310`)
 
 
+.. _v0.14.3 / 2017-05-05:
+
 0.14.3 / 2017-05-05
 -------------------
 
@@ -3744,6 +4446,8 @@ DataFrame
 ^^^^^^^^^
 
 -  Pandas 0.20.0 support
+
+.. _v0.14.2 / 2017-05-03:
 
 0.14.2 / 2017-05-03
 -------------------
@@ -3784,6 +4488,8 @@ Core
 -  Improve fusion performance (:pr:`2129`), (:pr:`2131`), and (:pr:`2112`)
 
 
+.. _v0.14.1 / 2017-03-22:
+
 0.14.1 / 2017-03-22
 -------------------
 
@@ -3821,6 +4527,8 @@ Core
     (:pr:`2070`)
 -   Ensure that worker processes have different random seeds (:pr:`2094`)
 
+
+.. _v0.14.0 / 2017-02-24:
 
 0.14.0 / 2017-02-24
 -------------------
@@ -3870,6 +4578,8 @@ Core
 - Dask.compute traverses Python collections (:pr:`1975`)
 - Structural sharing between graphs in dask.array and dask.delayed (:pr:`1985`)
 
+
+.. _v0.13.0 / 2017-01-02:
 
 0.13.0 / 2017-01-02
 -------------------
@@ -3924,6 +4634,8 @@ Core
 - Refactor core byte ingest (:pr:`1768`), (:pr:`1774`)
 - Improve import time (:pr:`1833`)
 
+
+.. _v0.12.0 / 2016-11-03:
 
 0.12.0 / 2016-11-03
 -------------------
@@ -3998,6 +4710,8 @@ Administration
 - Micro-optimize get_dependencies (:pr:`1722`)
 
 
+.. _v0.11.0 / 2016-08-24:
+
 0.11.0 / 2016-08-24
 -------------------
 
@@ -4025,6 +4739,8 @@ Breaking Changes
   create a very large number of tasks
 
 
+.. _v0.10.2 / 2016-07-27:
+
 0.10.2 / 2016-07-27
 -------------------
 
@@ -4046,6 +4762,8 @@ Breaking Changes
 - Improvements to ``dask.dataframe.read_hdf``, especially when reading from
   multiple files and docs
 
+
+.. _v0.10.0 / 2016-06-13:
 
 0.10.0 / 2016-06-13
 -------------------
@@ -4103,6 +4821,8 @@ Other
   environments.  This can be changed back by explicitly providing a keyword
   argument.  Anonymous mode must be explicitly declared if desired.
 
+
+.. _v0.9.0 / 2016-05-11:
 
 0.9.0 / 2016-05-11
 ------------------
@@ -4165,6 +4885,8 @@ Other
 - General performance tuning
 
 
+.. _v0.8.1 / 2016-03-11:
+
 0.8.1 / 2016-03-11
 ------------------
 
@@ -4186,6 +4908,8 @@ DataFrame
 - Add ``melt`` function
 - Bugfixes for io to bcolz and hdf5
 
+
+.. _v0.8.0 / 2016-02-20:
 
 0.8.0 / 2016-02-20
 ------------------
@@ -4224,6 +4948,8 @@ Other
 - Moved the dask project to a new dask organization
 
 
+.. _v0.7.6 / 2016-01-05:
+
 0.7.6 / 2016-01-05
 ------------------
 
@@ -4252,6 +4978,8 @@ Core
 - Test Python 3.5
 
 
+.. _v0.7.4 / 2015-10-23:
+
 0.7.4 / 2015-10-23
 ------------------
 
@@ -4279,6 +5007,8 @@ https://distributed.dask.org . General feedback on that project is most
 welcome from this community.
 
 
+.. _v0.7.3 / 2015-09-25:
+
 0.7.3 / 2015-09-25
 ------------------
 
@@ -4295,6 +5025,8 @@ with reading non-ascii csv files. Performance improvements and  bug fixes
 with resample. More flexible read_hdf with globbing. And many more. Various
 bug fixes in ``dask.imperative`` and ``dask.bag``.
 
+
+.. _v0.7.0 / 2015-08-15:
 
 0.7.0 / 2015-08-15
 ------------------
@@ -4324,6 +5056,8 @@ Infrastructure
   computations.  This will be useful for caching in the future.
 - All collections (Array, Bag, DataFrame) inherit from common subclass
 
+
+.. _v0.6.1 / 2015-07-23:
 
 0.6.1 / 2015-07-23
 ------------------
@@ -4358,7 +5092,7 @@ Other
 - There is also a gitter chat room and a stackoverflow tag
 
 
-.. _`Guido Imperiale`: https://github.com/crusaderky
+.. _`crusaderky`: https://github.com/crusaderky
 .. _`John A Kirkham`: https://github.com/jakirkham
 .. _`Matthew Rocklin`: https://github.com/mrocklin
 .. _`Jim Crist`: https://github.com/jcrist
@@ -4716,6 +5450,7 @@ Other
 .. _`Martin Fleischmann`: https://github.com/martinfleis
 .. _`Robert Hales`: https://github.com/robalar
 .. _`João Paulo Lacerda`: https://github.com/jopasdev
+.. _`neel iyer`: https://github.com/spiyer99
 .. _`SnkSynthesis`: https://github.com/SnkSynthesis
 .. _`JoranDox`: https://github.com/JoranDox
 .. _`Kinshuk Dua`: https://github.com/kinshukdua
@@ -4734,3 +5469,40 @@ Other
 .. _`mihir`: https://github.com/ek234
 .. _`Sarah Charlotte Johnson`: https://github.com/scharlottej13
 .. _`ofirr`: https://github.com/ofirr
+.. _`kori73`: https://github.com/kori73
+.. _`TnTo`: https://github.com/TnTo
+.. _`ParticularMiner`: https://github.com/ParticularMiner
+.. _`aeisenbarth`: https://github.com/aeisenbarth
+.. _`Aneesh Nema`: https://github.com/aneeshnema
+.. _`Deepyaman Datta`: https://github.com/deepyaman
+.. _`Maren Westermann`: https://github.com/marenwestermann
+.. _`Michael Delgado`: https://github.com/delgadom
+.. _`abergou`: https://github.com/abergou
+.. _`Pavithra Eswaramoorthy`: https://github.com/pavithraes
+.. _`Maxim Lippeveld`: https://github.com/MaximLippeveld
+.. _`Kirito1397`: https://github.com/Kirito1397
+.. _`Xinrong Meng`: https://github.com/xinrong-databricks
+.. _`Bryan Weber`: https://github.com/bryanwweber
+.. _`Amir Kadivar`: https://github.com/amirkdv
+.. _`Pedro Silva`: https://github.com/ppsbs
+.. _`Knut Nordanger`: https://github.com/nordange
+.. _`Ben Glossner`: https://github.com/bglossner
+.. _`Dranaxel`: https://github.com/Dranaxel
+.. _`Holden Karau`: https://github.com/holdenk
+.. _`Peter`: https://github.com/peterpandelidis
+.. _`Thomas Grainger`: https://github.com/graingert
+.. _`Martin Thøgersen`: https://github.com/th0ger
+.. _`Leo Gao`: https://github.com/leogao2
+.. _`Paul Hobson`: https://github.com/phobson
+.. _`LSturtew`: https://github.com/LSturtew
+.. _`Michał Górny`: https://github.com/mgorny
+.. _`lrjball`: https://github.com/lrjball
+.. _`Davide Gavio`: https://github.com/davidegavio
+.. _`Ben Greiner`: https://github.com/bnavigator
+.. _`Roger Filmyer`: https://github.com/rfilmyer
+.. _`Richard`: https://github.com/richarms
+.. _`Francesco Andreuzzi`: https://github.com/fAndreuzzi
+.. _`Nadiem Sissouno`: https://github.com/sissnad
+.. _`Jorge López`: https://github.com/jorloplaz
+.. _`Cheun Hong`: https://github.com/cheunhong
+.. _`Eray Aslan`: https://github.com/erayaslan

@@ -4,6 +4,7 @@ distributed = pytest.importorskip("distributed")
 
 import asyncio
 import os
+import sys
 from functools import partial
 from operator import add
 
@@ -15,14 +16,30 @@ from distributed.utils_test import cluster, gen_cluster, inc, varying
 import dask
 import dask.bag as db
 from dask import compute, delayed, persist
+from dask.blockwise import Blockwise
 from dask.delayed import Delayed
 from dask.distributed import futures_of, wait
 from dask.highlevelgraph import HighLevelGraph, MaterializedLayer
-from dask.utils import get_named_args, tmpdir
+from dask.utils import get_named_args, tmpdir, tmpfile
 
 if "should_check_state" in get_named_args(gen_cluster):
     gen_cluster = partial(gen_cluster, should_check_state=False)
     cluster = partial(cluster, should_check_state=False)
+
+
+# TODO: the fixture teardown for `cluster_fixture` is failing periodically with
+# a PermissionError on windows only (in CI). Since this fixture lives in the
+# distributed codebase and is nested within other fixtures we use, it's hard to
+# patch it from the dask codebase. And since the error is during fixture
+# teardown, an xfail won't cut it. As a hack, for now we skip all these tests
+# on windows. See https://github.com/dask/dask/issues/8877.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "The teardown of distributed.utils_test.cluster_fixture "
+        "fails on windows CI currently"
+    ),
+)
 
 
 def test_can_import_client():
@@ -77,8 +94,23 @@ def test_futures_to_delayed_dataframe(c):
     ddf = dd.from_delayed(futures)
     dd.utils.assert_eq(ddf.compute(), pd.concat([df, df], axis=0))
 
+    # Make sure from_delayed is Blockwise
+    assert isinstance(ddf.dask.layers[ddf._name], Blockwise)
+
     with pytest.raises(TypeError):
         ddf = dd.from_delayed([1, 2])
+
+
+def test_from_delayed_dataframe(c):
+    # Check that Delayed keys in the form of a tuple
+    # are properly serialized in `from_delayed`
+    pd = pytest.importorskip("pandas")
+    dd = pytest.importorskip("dask.dataframe")
+
+    df = pd.DataFrame({"x": range(20)})
+    ddf = dd.from_pandas(df, npartitions=2)
+    ddf = dd.from_delayed(ddf.to_delayed())
+    dd.utils.assert_eq(ddf, df, scheduler=c)
 
 
 @pytest.mark.parametrize("fuse", [True, False])
@@ -130,8 +162,13 @@ def test_futures_to_delayed_array(c):
     assert_eq(A.compute(), np.concatenate([x, x], axis=0))
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Running on a single-machine scheduler when a distributed client "
+    "is active might lead to unexpected results."
+)
 @gen_cluster(client=True)
 async def test_local_get_with_distributed_active(c, s, a, b):
+
     with dask.config.set(scheduler="sync"):
         x = delayed(inc)(1).persist()
     await asyncio.sleep(0.01)
@@ -146,11 +183,15 @@ def test_to_hdf_distributed(c):
     pytest.importorskip("numpy")
     pytest.importorskip("pandas")
 
-    from ..dataframe.io.tests.test_hdf import test_to_hdf
+    from dask.dataframe.io.tests.test_hdf import test_to_hdf
 
     test_to_hdf()
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Running on a single-machine scheduler when a distributed client "
+    "is active might lead to unexpected results."
+)
 @pytest.mark.parametrize(
     "npartitions",
     [
@@ -169,7 +210,7 @@ def test_to_hdf_scheduler_distributed(npartitions, c):
     pytest.importorskip("numpy")
     pytest.importorskip("pandas")
 
-    from ..dataframe.io.tests.test_hdf import test_to_hdf_schedulers
+    from dask.dataframe.io.tests.test_hdf import test_to_hdf_schedulers
 
     test_to_hdf_schedulers(None, npartitions)
 
@@ -181,9 +222,15 @@ async def test_serializable_groupby_agg(c, s, a, b):
     df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [1, 0, 1, 0]})
     ddf = dd.from_pandas(df, npartitions=2)
 
-    result = ddf.groupby("y").agg("count")
+    result = ddf.groupby("y").agg("count", split_out=2)
 
-    await c.compute(result)
+    # Check Culling and Compute
+    agg0 = await c.compute(result.partitions[0])
+    agg1 = await c.compute(result.partitions[1])
+    dd.utils.assert_eq(
+        pd.concat([agg0, agg1]),
+        pd.DataFrame({"x": [2, 2], "y": [0, 1]}).set_index("y"),
+    )
 
 
 def test_futures_in_graph(c):
@@ -198,16 +245,15 @@ def test_futures_in_graph(c):
     assert xxyy3.compute(scheduler="dask.distributed") == ((1 + 1) + (2 + 2)) + 10
 
 
-def test_zarr_distributed_roundtrip():
+def test_zarr_distributed_roundtrip(c):
     da = pytest.importorskip("dask.array")
     pytest.importorskip("zarr")
-    assert_eq = da.utils.assert_eq
 
     with tmpdir() as d:
         a = da.zeros((3, 3), chunks=(1, 1))
         a.to_zarr(d)
         a2 = da.from_zarr(d)
-        assert_eq(a, a2)
+        da.assert_eq(a, a2, scheduler=c)
         assert a2.chunks == a.chunks
 
 
@@ -245,7 +291,7 @@ def test_local_scheduler():
         z = await y.persist()
         assert len(z.dask) == 1
 
-    asyncio.get_event_loop().run_until_complete(f())
+    asyncio.run(f())
 
 
 @gen_cluster(client=True)
@@ -312,9 +358,13 @@ def test_blockwise_array_creation(c, io, fuse):
         dsk = dask.array.optimize(darr.dask, darr.__dask_keys__())
         # dsk should be a dict unless fuse is explicitly False
         assert isinstance(dsk, dict) == (fuse is not False)
-        da.assert_eq(darr, narr)
+        da.assert_eq(darr, narr, scheduler=c)
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Running on a single-machine scheduler when a distributed client "
+    "is active might lead to unexpected results."
+)
 @pytest.mark.parametrize(
     "io",
     ["parquet-pyarrow", "parquet-fastparquet", "csv", "hdf"],
@@ -324,6 +374,11 @@ def test_blockwise_array_creation(c, io, fuse):
 def test_blockwise_dataframe_io(c, tmpdir, io, fuse, from_futures):
     pd = pytest.importorskip("pandas")
     dd = pytest.importorskip("dask.dataframe")
+
+    # TODO: this configuration is flaky on osx in CI
+    # See https://github.com/dask/dask/issues/8816
+    if from_futures and sys.platform == "darwin":
+        pytest.xfail("This test sometimes fails on osx in CI")
 
     df = pd.DataFrame({"x": [1, 2, 3] * 5, "y": range(15)})
 
@@ -359,6 +414,7 @@ def test_blockwise_dataframe_io(c, tmpdir, io, fuse, from_futures):
         dsk = dask.dataframe.optimize(ddf.dask, ddf.__dask_keys__())
         # dsk should not be a dict unless fuse is explicitly True
         assert isinstance(dsk, dict) == bool(fuse)
+
         dd.assert_eq(ddf, df, check_index=False)
 
 
@@ -472,8 +528,7 @@ async def test_combo_of_layer_types(c, s, a, b):
     assert res == 21
 
 
-@gen_cluster(client=True)
-async def test_blockwise_concatenate(c, s, a, b):
+def test_blockwise_concatenate(c):
     """Test a blockwise operation with concatenated axes"""
     da = pytest.importorskip("dask.array")
     np = pytest.importorskip("numpy")
@@ -494,9 +549,8 @@ async def test_blockwise_concatenate(c, s, a, b):
         dtype=x.dtype,
         concatenate=True,
     )
-
-    await c.compute(z, optimize_graph=False)
-    da.assert_eq(z, x)
+    c.compute(z, optimize_graph=False)
+    da.assert_eq(z, x, scheduler=c)
 
 
 @gen_cluster(client=True)
@@ -653,3 +707,104 @@ async def test_pack_MaterializedLayer_handles_futures_in_graph_properly(c, s, a,
     packed = hlg.__dask_distributed_pack__(c, ["z"], {})
     unpacked = HighLevelGraph.__dask_distributed_unpack__(packed)
     assert unpacked["deps"] == {"x": {fut.key}, "y": {fut.key}, "z": {"y"}}
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Running on a single-machine scheduler when a distributed client "
+    "is active might lead to unexpected results."
+)
+@gen_cluster(client=True)
+async def test_to_sql_engine_kwargs(c, s, a, b):
+    # https://github.com/dask/dask/issues/8738
+    pd = pytest.importorskip("pandas")
+    dd = pytest.importorskip("dask.dataframe")
+    pytest.importorskip("sqlalchemy")
+
+    df = pd.DataFrame({"a": range(10), "b": range(10)})
+    df.index.name = "index"
+    ddf = dd.from_pandas(df, npartitions=1)
+    with tmpfile() as f:
+        uri = f"sqlite:///{f}"
+        result = ddf.to_sql(
+            "test", uri, index=True, engine_kwargs={"echo": False}, compute=False
+        )
+        await c.compute(result)
+
+        dd.utils.assert_eq(
+            ddf,
+            dd.read_sql_table("test", uri, "index"),
+            check_divisions=False,
+        )
+
+
+@gen_cluster(client=True)
+async def test_non_recursive_df_reduce(c, s, a, b):
+    # See https://github.com/dask/dask/issues/8773
+
+    dd = pytest.importorskip("dask.dataframe")
+    pd = pytest.importorskip("pandas")
+
+    class SomeObject:
+        def __init__(self, val):
+            self.val = val
+
+    N = 170
+    series = pd.Series(data=[1] * N, index=range(2, N + 2))
+    dask_series = dd.from_pandas(series, npartitions=34)
+    result = dask_series.reduction(
+        chunk=lambda x: x,
+        aggregate=lambda x: SomeObject(x.sum().sum()),
+        split_every=False,
+        token="commit-dataset",
+        meta=object,
+    )
+
+    assert (await c.compute(result)).val == 170
+
+
+def test_set_index_no_resursion_error(c):
+    # see: https://github.com/dask/dask/issues/8955
+    pytest.importorskip("dask.dataframe")
+    try:
+        ddf = (
+            dask.datasets.timeseries(start="2000-01-01", end="2000-07-01", freq="12h")
+            .reset_index()
+            .astype({"timestamp": str})
+        )
+        ddf = ddf.set_index("timestamp", sorted=True)
+        ddf.compute()
+    except RecursionError:
+        pytest.fail("dd.set_index triggered a recursion error")
+
+
+@pytest.mark.xfail(reason="https://github.com/dask/dask/issues/8991", strict=True)
+@gen_cluster(client=True)
+async def test_gh_8991(c, s, a, b):
+    # Test illustrating something amiss with HighLevelGraph.key_dependencies.
+    # The intention is for this to be a cache, so if we clear it, things
+    # should still work.
+
+    # This is a bad test, and we should rethink/remove it as soon as the issue is
+    # resolved whether, it's fixing the underlying problem or removing
+    # HighLevelGraph.key_dependencies alltogether.
+    datasets = pytest.importorskip("dask.datasets")
+    result = datasets.timeseries().shuffle("x").to_orc("tmp", compute=False)
+
+    # Create a dsk and mock sending it to the scheduler.
+    dsk_opt = result.__dask_optimize__(result.dask, result.key)
+    unpacked = HighLevelGraph.__dask_distributed_unpack__(
+        dsk_opt.__dask_distributed_pack__(c, result.key)
+    )
+    deps = unpacked["deps"]
+
+    # Create a version of the dsk without the key_dependencies and mock sending it to
+    # the scheduler as well.
+    dsk_opt_nokeys = dsk_opt.copy()
+    dsk_opt_nokeys.key_dependencies.clear()
+    unpacked_nokeys = HighLevelGraph.__dask_distributed_unpack__(
+        dsk_opt_nokeys.__dask_distributed_pack__(c, result.key)
+    )
+    deps_nokeys = unpacked_nokeys["deps"]
+
+    # The recalculated dependencies should still be the same!
+    assert deps == deps_nokeys

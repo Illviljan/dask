@@ -6,7 +6,6 @@ channels:
 dependencies:
   # required dependencies
   - python=3.8
-  - setuptools<60.0
   - packaging
   - numpy=1.19
   - pandas=1.2
@@ -15,6 +14,7 @@ dependencies:
   - pytest
   - pytest-cov
   - pytest-rerunfailures
+  - pytest-timeout
   - pytest-xdist
   - moto
   - flask
@@ -28,9 +28,7 @@ dependencies:
   - tiledb>=2.5.0
   - xarray
   - fsspec
-  # sqlalchemy 1.4.0 causes deprecation warnings to be raised from pandas
-  # along with other issues https://github.com/pandas-dev/pandas/issues/40467
-  - sqlalchemy<1.4.0
+  - sqlalchemy>=1.4.0
   - pyarrow=4.0
   - coverage
   - jsonschema

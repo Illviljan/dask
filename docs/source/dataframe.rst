@@ -13,6 +13,7 @@ DataFrame
    dataframe-indexing.rst
    dataframe-categoricals.rst
    dataframe-extend.rst
+   dataframe-parquet.rst
    dataframe-sql.rst
 
 A Dask DataFrame is a large parallel DataFrame composed of many smaller Pandas
@@ -171,5 +172,5 @@ Dask DataFrame as they are for Dask Array.  This is changing, and
 the Pandas development team is actively working on releasing the GIL.
 
 When dealing with text data, you may see speedups by switching to the
-:doc:`distributed scheduler <how-to/deploy-dask/single-distributed>` either on a cluster or
+:doc:`distributed scheduler <deploying>` either on a cluster or
 single machine.

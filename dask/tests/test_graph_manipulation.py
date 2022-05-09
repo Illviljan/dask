@@ -115,8 +115,8 @@ def demo_tuples(layers: bool) -> "tuple[Tuple, Tuple, NodeCounter]":
         {"c": set(), "d": set()},
     )
     if not layers:
-        dsk1 = dsk1.to_dict()
-        dsk2 = dsk2.to_dict()
+        dsk1 = dsk1.to_dict()  # type: ignore
+        dsk2 = dsk2.to_dict()  # type: ignore
 
     return Tuple(dsk1, list(dsk1)), Tuple(dsk2, list(dsk2)), cnt
 
@@ -223,6 +223,30 @@ def test_clone(layers):
     c8 = out["x"][0]
     assert_no_common_keys(c8, t2, omit=t1, layers=layers)
     assert_no_common_keys(c8, t3, layers=layers)
+
+
+@pytest.mark.skipif("not da or not dd")
+@pytest.mark.parametrize(
+    "literal",
+    [
+        1,
+        (1,),
+        [1],
+        {1: 1},
+        {1},
+    ],
+)
+def test_blockwise_clone_with_literals(literal):
+    arr = da.ones(10, chunks=1)
+
+    def noop(arr, lit):
+        return arr
+
+    blk = da.blockwise(noop, "x", arr, "x", literal, None)
+
+    cln = clone(blk)
+
+    assert_no_common_keys(blk, cln, layers=True)
 
 
 @pytest.mark.parametrize("layers", [False, True])

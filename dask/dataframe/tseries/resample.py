@@ -2,19 +2,12 @@ import numpy as np
 import pandas as pd
 from pandas.core.resample import Resampler as pd_Resampler
 
-from ...base import tokenize
-from ...highlevelgraph import HighLevelGraph
-from ...utils import derived_from
-from .. import methods
-from .._compat import PANDAS_GT_140
-from ..core import DataFrame, Series
-
-
-def getnanos(rule):
-    try:
-        return getattr(rule, "nanos", None)
-    except ValueError:
-        return None
+from dask.base import tokenize
+from dask.dataframe import methods
+from dask.dataframe._compat import PANDAS_GT_140
+from dask.dataframe.core import DataFrame, Series
+from dask.highlevelgraph import HighLevelGraph
+from dask.utils import derived_from
 
 
 def _resample_series(

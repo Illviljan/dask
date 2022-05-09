@@ -17,9 +17,14 @@ pytest.importorskip("flask")  # server mode needs flask too
 requests = pytest.importorskip("requests")
 
 from fsspec.compression import compr
-from fsspec.core import open_files
+from fsspec.core import get_fs_token_paths, open_files
 from s3fs import S3FileSystem as DaskS3FileSystem
 from tlz import concat, valmap
+
+try:
+    import fsspec.parquet as fsspec_parquet
+except ImportError:
+    fsspec_parquet = None
 
 from dask import compute
 from dask.bytes.core import read_bytes
@@ -371,7 +376,8 @@ def test_read_bytes_delimited(s3, blocksize, s3so):
 
 
 @pytest.mark.parametrize(
-    "fmt,blocksize", [(fmt, None) for fmt in compr] + [(fmt, 10) for fmt in compr]
+    "fmt,blocksize",
+    [(fmt, None) for fmt in compr] + [(fmt, 10) for fmt in compr],  # type: ignore
 )
 def test_compression(s3, fmt, blocksize, s3so):
     if fmt not in compress:
@@ -474,11 +480,72 @@ def test_parquet(s3, engine, s3so, metadata_file):
     assert "part.0.parquet" in files
 
     df2 = dd.read_parquet(
-        url, index="foo", gather_statistics=True, engine=engine, storage_options=s3so
+        url, index="foo", calculate_divisions=True, engine=engine, storage_options=s3so
     )
     assert len(df2.divisions) > 1
 
     dd.utils.assert_eq(data, df2)
+
+    # Check that `open_file_options` arguments are
+    # really passed through to fsspec
+    if fsspec_parquet:
+
+        # Passing `open_file_options` kwargs will fail
+        # if you set an unsupported engine
+        with pytest.raises(ValueError):
+            dd.read_parquet(
+                url,
+                engine=engine,
+                storage_options=s3so,
+                open_file_options={
+                    "precache_options": {"method": "parquet", "engine": "foo"},
+                },
+            ).compute()
+
+        # ...but should work fine if you modify the
+        # maximum block-transfer size (max_block)
+        dd.read_parquet(
+            url,
+            engine=engine,
+            storage_options=s3so,
+            open_file_options={
+                "precache_options": {"method": "parquet", "max_block": 8_000},
+            },
+        ).compute()
+
+    # Check "open_file_func"
+    fs = get_fs_token_paths(url, storage_options=s3so)[0]
+
+    def _open(*args, check=True, **kwargs):
+        assert check
+        return fs.open(*args, **kwargs)
+
+    # Should fail if `check=False`
+    with pytest.raises(AssertionError):
+        dd.read_parquet(
+            url,
+            engine=engine,
+            storage_options=s3so,
+            open_file_options={"open_file_func": _open, "check": False},
+        ).compute()
+
+    # Should succeed otherwise
+    df3 = dd.read_parquet(
+        url,
+        engine=engine,
+        storage_options=s3so,
+        open_file_options={"open_file_func": _open},
+    )
+    dd.utils.assert_eq(data, df3)
+
+    # Check that `cache_type="all"` result is same
+    df4 = dd.read_parquet(
+        url,
+        engine=engine,
+        storage_options=s3so,
+        open_file_options={"cache_type": "all"},
+    )
+    dd.utils.assert_eq(data, df4)
 
 
 @pytest.mark.parametrize("engine", ["pyarrow", "fastparquet"])
@@ -506,6 +573,7 @@ def test_parquet_append(s3, engine, s3so):
         engine=engine,
         storage_options=s3so,
         write_index=False,
+        write_metadata_file=True,
     )
     df.to_parquet(
         url,
@@ -535,9 +603,10 @@ def test_parquet_append(s3, engine, s3so):
     )
 
 
-def test_parquet_wstoragepars(s3, s3so):
+@pytest.mark.parametrize("engine", ["pyarrow", "fastparquet"])
+def test_parquet_wstoragepars(s3, s3so, engine):
+    pytest.importorskip(engine)
     dd = pytest.importorskip("dask.dataframe")
-    pytest.importorskip("fastparquet")
     pd = pytest.importorskip("pandas")
     np = pytest.importorskip("numpy")
 
@@ -545,24 +614,30 @@ def test_parquet_wstoragepars(s3, s3so):
 
     data = pd.DataFrame({"i32": np.array([0, 5, 2, 5])})
     df = dd.from_pandas(data, chunksize=500)
-    df.to_parquet(url, write_index=False, storage_options=s3so)
+    df.to_parquet(
+        url,
+        engine=engine,
+        write_index=False,
+        storage_options=s3so,
+        write_metadata_file=True,
+    )
 
-    dd.read_parquet(url, storage_options=dict(**s3so, **{"default_fill_cache": False}))
+    dd.read_parquet(
+        url,
+        engine=engine,
+        storage_options=dict(**s3so, **{"default_fill_cache": False}),
+    )
     assert s3.current().default_fill_cache is False
-    dd.read_parquet(url, storage_options=dict(**s3so, **{"default_fill_cache": True}))
+    dd.read_parquet(
+        url, engine=engine, storage_options=dict(**s3so, **{"default_fill_cache": True})
+    )
     assert s3.current().default_fill_cache is True
 
     dd.read_parquet(
-        url, storage_options=dict(**s3so, **{"default_block_size": 2 ** 20})
+        url,
+        engine=engine,
+        storage_options=dict(**s3so, **{"default_block_size": 2**20}),
     )
-    assert s3.current().default_block_size == 2 ** 20
+    assert s3.current().default_block_size == 2**20
     with s3.current().open(url + "/_metadata") as f:
-        assert f.blocksize == 2 ** 20
-
-
-def test_get_pyarrow_fs_s3(s3):
-    pa = pytest.importorskip("pyarrow")
-    if parse_version(pa.__version__).major >= 2:
-        pytest.skip("fsspec no loger inherits from pyarrow>=2.0.")
-    fs = DaskS3FileSystem(anon=True)
-    assert isinstance(fs, pa.filesystem.FileSystem)
+        assert f.blocksize == 2**20
