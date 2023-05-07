@@ -17,31 +17,44 @@ from dask.core import get_deps
 
 @pytest.mark.parametrize("dtype", ["f4", "i4"])
 @pytest.mark.parametrize("keepdims", [True, False])
-def test_numel(dtype, keepdims):
+@pytest.mark.parametrize("nan", [True, False])
+def test_numel(dtype, keepdims, nan):
     x = np.ones((2, 3, 4))
+    if nan:
+        y = np.random.default_rng().uniform(-1, 1, size=(2, 3, 4))
+        x[y < 0] = np.nan
+        numel = da.reductions.nannumel
+
+        def _sum(arr, **kwargs):
+            n = np.sum(np.ma.masked_where(np.isnan(arr), arr), **kwargs)
+            return n.filled(0) if isinstance(n, np.ma.MaskedArray) else n
+
+    else:
+        numel = da.reductions.numel
+        _sum = np.sum
 
     assert_eq(
-        da.reductions.numel(x, axis=(), keepdims=keepdims, dtype=dtype),
-        np.sum(x, axis=(), keepdims=keepdims, dtype=dtype),
+        numel(x, axis=(), keepdims=keepdims, dtype=dtype),
+        _sum(x, axis=(), keepdims=keepdims, dtype=dtype),
     )
     assert_eq(
-        da.reductions.numel(x, axis=0, keepdims=keepdims, dtype=dtype),
-        np.sum(x, axis=0, keepdims=keepdims, dtype=dtype),
+        numel(x, axis=0, keepdims=keepdims, dtype=dtype),
+        _sum(x, axis=0, keepdims=keepdims, dtype=dtype),
     )
 
     for length in range(x.ndim):
         for sub in itertools.combinations([d for d in range(x.ndim)], length):
             assert_eq(
-                da.reductions.numel(x, axis=sub, keepdims=keepdims, dtype=dtype),
-                np.sum(x, axis=sub, keepdims=keepdims, dtype=dtype),
+                numel(x, axis=sub, keepdims=keepdims, dtype=dtype),
+                _sum(x, axis=sub, keepdims=keepdims, dtype=dtype),
             )
 
     for length in range(x.ndim):
         for sub in itertools.combinations([d for d in range(x.ndim)], length):
-            ssub = np.random.shuffle(list(sub))
+            ssub = np.random.default_rng().shuffle(list(sub))
             assert_eq(
-                da.reductions.numel(x, axis=ssub, keepdims=keepdims, dtype=dtype),
-                np.sum(x, axis=ssub, keepdims=keepdims, dtype=dtype),
+                numel(x, axis=ssub, keepdims=keepdims, dtype=dtype),
+                _sum(x, axis=ssub, keepdims=keepdims, dtype=dtype),
             )
 
 
@@ -227,7 +240,7 @@ def test_reductions_2D(dtype):
     ],
 )
 def test_arg_reductions(dfunc, func):
-    x = np.random.random((10, 10, 10))
+    x = np.random.default_rng().random((10, 10, 10))
     a = da.from_array(x, chunks=(3, 4, 5))
 
     assert_eq(dfunc(a), func(x))
@@ -257,11 +270,23 @@ def test_arg_reductions(dfunc, func):
 
 
 @pytest.mark.parametrize(
+    ["dfunc", "func"], [(da.nanmin, np.nanmin), (da.nanmax, np.nanmax)]
+)
+def test_nan_reduction_warnings(dfunc, func):
+    x = np.random.default_rng().random((10, 10, 10))
+    x[5] = np.nan
+    a = da.from_array(x, chunks=(3, 4, 5))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # All-NaN slice encountered
+        expected = func(x, 1)
+    assert_eq(dfunc(a, 1), expected)
+
+
+@pytest.mark.parametrize(
     ["dfunc", "func"], [(da.nanargmin, np.nanargmin), (da.nanargmax, np.nanargmax)]
 )
 def test_nanarg_reductions(dfunc, func):
-
-    x = np.random.random((10, 10, 10))
+    x = np.random.default_rng().random((10, 10, 10))
     x[5] = np.nan
     a = da.from_array(x, chunks=(3, 4, 5))
     assert_eq(dfunc(a), func(x))
@@ -278,6 +303,27 @@ def test_nanarg_reductions(dfunc, func):
         a = da.from_array(x, chunks=(3, 4, 5))
         with pytest.raises(ValueError):
             dfunc(a).compute()
+
+
+@pytest.mark.parametrize(["dfunc", "func"], [(da.min, np.min), (da.max, np.max)])
+def test_min_max_empty_chunks(dfunc, func):
+    x1 = np.arange(10)
+    a1 = da.from_array(x1, chunks=1)
+    assert_eq(dfunc(a1[a1 < 2]), func(x1[x1 < 2]))
+
+    x2 = np.arange(10)
+    a2 = da.from_array(x2, chunks=((5, 0, 5),))
+    assert_eq(dfunc(a2), func(x2))
+
+    x3 = np.array([[1, 1, 2, 3], [1, 1, 4, 0]])
+    a3 = da.from_array(x3, chunks=1)
+    assert_eq(dfunc(a3[a3 >= 2]), func(x3[x3 >= 2]))
+
+    a4 = da.arange(10)
+    with pytest.raises(
+        ValueError
+    ):  # Checking it mimics numpy behavior when all chunks are empty
+        dfunc(a4[a4 < 0]).compute()
 
 
 @pytest.mark.parametrize("func", ["argmax", "nanargmax"])
@@ -381,7 +427,7 @@ def test_moment():
 
 
 def test_reductions_with_negative_axes():
-    x = np.random.random((4, 4, 4))
+    x = np.random.default_rng().random((4, 4, 4))
     a = da.from_array(x, chunks=2)
 
     assert_eq(a.argmin(axis=-1), x.argmin(axis=-1))
@@ -592,8 +638,9 @@ def test_topk_argtopk1(npfunc, daskfunc, split_every):
     k = 5
     # Test at least 3 levels of aggregation when split_every=2
     # to stress the different chunk, combine, aggregate kernels
-    npa = np.random.random(800)
-    npb = np.random.random((10, 20, 30))
+    rng = np.random.default_rng()
+    npa = rng.random(800)
+    npb = rng.random((10, 20, 30))
 
     a = da.from_array(npa, chunks=((120, 80, 100, 200, 300),))
     b = da.from_array(npb, chunks=(4, 8, 8))
@@ -644,7 +691,7 @@ def test_topk_argtopk1(npfunc, daskfunc, split_every):
 @pytest.mark.parametrize("chunksize", [1, 2, 3, 4, 5, 10])
 def test_topk_argtopk2(npfunc, daskfunc, split_every, chunksize):
     """Fine test use cases when k is larger than chunk size"""
-    npa = np.random.random((10,))
+    npa = np.random.default_rng().random((10,))
     a = da.from_array(npa, chunks=chunksize)
     k = 5
 
@@ -655,7 +702,7 @@ def test_topk_argtopk2(npfunc, daskfunc, split_every, chunksize):
 
 
 def test_topk_argtopk3():
-    a = da.random.random((10, 20, 30), chunks=(4, 8, 8))
+    a = da.random.default_rng().random((10, 20, 30), chunks=(4, 8, 8))
 
     # As Array methods
     assert_eq(a.topk(5, axis=1, split_every=2), da.topk(a, 5, axis=1, split_every=2))

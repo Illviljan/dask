@@ -1,3 +1,4 @@
+import contextlib
 import warnings
 
 import numpy as np
@@ -7,6 +8,7 @@ from packaging.version import parse as parse_version
 
 import dask.dataframe as dd
 from dask.dataframe._compat import PANDAS_VERSION, tm
+from dask.dataframe.reshape import _get_dummies_dtype_default
 from dask.dataframe.utils import assert_eq, make_meta
 
 
@@ -27,6 +29,15 @@ def test_get_dummies(data):
     res = dd.get_dummies(ddata)
     assert_eq(res, exp)
     tm.assert_index_equal(res.columns, exp.columns)
+
+
+def test_get_dummies_categories_order():
+    df = pd.DataFrame({"a": [0.0, 0.0, 1.0, 1.0, 0.0], "b": [1.0, 0.0, 1.0, 0.0, 1.0]})
+    ddf = dd.from_pandas(df, npartitions=1)
+    ddf = ddf.categorize(columns=["a", "b"])
+    res_p = pd.get_dummies(df.astype("category"))
+    res_d = dd.get_dummies(ddf)
+    assert_eq(res_d, res_p)
 
 
 def test_get_dummies_object():
@@ -100,6 +111,19 @@ def check_pandas_issue_45618_warning(test_func):
     return decorator
 
 
+@contextlib.contextmanager
+def ignore_numpy_bool8_deprecation():
+    # This warning comes from inside `pandas`. We can't do anything about it, so we ignore the warning.
+    # Note it's been fixed upstream in `pandas` https://github.com/pandas-dev/pandas/pull/49886.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            message="`np.bool8` is a deprecated alias for `np.bool_`",
+        )
+        yield
+
+
 @check_pandas_issue_45618_warning
 def test_get_dummies_sparse():
     s = pd.Series(pd.Categorical(["a", "b", "a"], categories=["a", "b", "c"]))
@@ -107,15 +131,19 @@ def test_get_dummies_sparse():
 
     exp = pd.get_dummies(s, sparse=True)
     res = dd.get_dummies(ds, sparse=True)
-    assert_eq(exp, res)
+    with ignore_numpy_bool8_deprecation():
+        assert_eq(exp, res)
 
-    assert res.compute().a.dtype == "Sparse[uint8, 0]"
-    assert pd.api.types.is_sparse(res.a.compute())
+    dtype = res.compute().a.dtype
+    assert dtype.fill_value == _get_dummies_dtype_default(0)
+    assert dtype.subtype == _get_dummies_dtype_default
+    assert isinstance(res.a.compute().dtype, pd.SparseDtype)
 
     exp = pd.get_dummies(s.to_frame(name="a"), sparse=True)
     res = dd.get_dummies(ds.to_frame(name="a"), sparse=True)
-    assert_eq(exp, res)
-    assert pd.api.types.is_sparse(res.a_a.compute())
+    with ignore_numpy_bool8_deprecation():
+        assert_eq(exp, res)
+    assert isinstance(res.a_a.compute().dtype, pd.SparseDtype)
 
 
 @check_pandas_issue_45618_warning
@@ -130,10 +158,13 @@ def test_get_dummies_sparse_mix():
 
     exp = pd.get_dummies(df, sparse=True)
     res = dd.get_dummies(ddf, sparse=True)
-    assert_eq(exp, res)
+    with ignore_numpy_bool8_deprecation():
+        assert_eq(exp, res)
 
-    assert res.compute().A_a.dtype == "Sparse[uint8, 0]"
-    assert pd.api.types.is_sparse(res.A_a.compute())
+    dtype = res.compute().A_a.dtype
+    assert dtype.fill_value == _get_dummies_dtype_default(0)
+    assert dtype.subtype == _get_dummies_dtype_default
+    assert isinstance(res.A_a.compute().dtype, pd.SparseDtype)
 
 
 def test_get_dummies_dtype():
@@ -212,7 +243,6 @@ def test_pivot_table(values, aggfunc):
 @pytest.mark.parametrize("values", ["B", ["D"], ["B", "D"]])
 @pytest.mark.parametrize("aggfunc", ["first", "last"])
 def test_pivot_table_firstlast(values, aggfunc):
-
     df = pd.DataFrame(
         {
             "A": np.random.choice(list("XYZ"), size=100),
@@ -236,7 +266,6 @@ def test_pivot_table_firstlast(values, aggfunc):
 
 
 def test_pivot_table_dtype():
-
     df = pd.DataFrame(
         {"A": list("AABB"), "B": pd.Categorical(list("ABAB")), "C": [1, 2, 3, 4]}
     )

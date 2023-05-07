@@ -421,6 +421,13 @@ def test_slicing_and_chunks():
     assert t.chunks == ((8, 8), (6, 6))
 
 
+def test_slicing_and_unknown_chunks():
+    a = da.ones((10, 5), chunks=5)
+    a._chunks = ((np.nan, np.nan), (5,))
+    with pytest.raises(ValueError, match="Array chunk size or shape is unknown"):
+        a[[0, 5]].compute()
+
+
 def test_slicing_identities():
     a = da.ones((24, 16), chunks=((4, 8, 8, 4), (2, 6, 6, 2)))
 
@@ -457,7 +464,7 @@ class ReturnItem:
 
 @pytest.mark.skip(reason="really long test")
 def test_slicing_exhaustively():
-    x = np.random.rand(6, 7, 8)
+    x = np.random.default_rng().random(6, 7, 8)
     a = da.from_array(x, chunks=(3, 3, 3))
     I = ReturnItem()
 
@@ -501,7 +508,7 @@ def test_empty_slice():
 
 
 def test_multiple_list_slicing():
-    x = np.random.rand(6, 7, 8)
+    x = np.random.default_rng().random((6, 7, 8))
     a = da.from_array(x, chunks=(3, 3, 3))
     assert_eq(x[:, [0, 1, 2]][[0, 1]], a[:, [0, 1, 2]][[0, 1]])
 
@@ -720,8 +727,9 @@ def test_index_with_bool_dask_array():
 
 
 def test_index_with_bool_dask_array_2():
-    x = np.random.random((10, 10, 10))
-    ind = np.random.random(10) > 0.5
+    rng = np.random.default_rng()
+    x = rng.random((10, 10, 10))
+    ind = rng.random(10) > 0.5
 
     d = da.from_array(x, chunks=(3, 4, 5))
     dind = da.from_array(ind, chunks=4)
@@ -752,7 +760,7 @@ def test_cull():
     "index", [(Ellipsis,), (None, Ellipsis), (Ellipsis, None), (None, Ellipsis, None)]
 )
 def test_slicing_with_Nones(shape, index):
-    x = np.random.random(shape)
+    x = np.random.default_rng().random(shape)
     d = da.from_array(x, chunks=shape)
 
     assert_eq(x[index], d[index])
@@ -782,7 +790,7 @@ def test_slicing_none_int_ellipses(a, b, c, d):
 
 def test_slicing_integer_no_warnings():
     # https://github.com/dask/dask/pull/2457/
-    X = da.random.random((100, 2), (2, 2))
+    X = da.random.default_rng().random(size=(100, 2), chunks=(2, 2))
     idx = np.array([0, 0, 1, 1])
     with warnings.catch_warnings(record=True) as record:
         X[idx].compute()
@@ -874,8 +882,15 @@ def test_slicing_plan(chunks, index, expected):
 def test_getitem_avoids_large_chunks():
     with dask.config.set({"array.chunk-size": "0.1Mb"}):
         a = np.arange(2 * 128 * 128, dtype="int64").reshape(2, 128, 128)
-        arr = da.from_array(a, chunks=(1, 128, 128))
         indexer = [0] + [1] * 11
+        arr = da.from_array(a, chunks=(1, 8, 8))
+        result = arr[
+            indexer
+        ]  # small chunks within the chunk-size limit should NOT raise PerformanceWarning
+        expected = a[indexer]
+        assert_eq(result, expected)
+
+        arr = da.from_array(a, chunks=(1, 128, 128))  # large chunks
         expected = a[indexer]
 
         # By default, we warn
@@ -902,23 +917,13 @@ def test_getitem_avoids_large_chunks():
             assert result.chunks == ((1,) * 12, (128,), (128,))
 
 
-@pytest.mark.parametrize(
-    "chunks",
-    [
-        ((1, 1, 1, 1), (np.nan,), (np.nan,)),
-        pytest.param(
-            ((np.nan, np.nan, np.nan, np.nan), (500,), (500,)),
-            marks=pytest.mark.xfail(reason="https://github.com/dask/dask/issues/6586"),
-        ),
-    ],
-)
-def test_getitem_avoids_large_chunks_missing(chunks):
+def test_getitem_avoids_large_chunks_missing():
     # We cannot apply the "avoid large chunks" optimization when
     # the chunks have unknown sizes.
-    with dask.config.set({"array.slicing.split-large-chunks": True}):
+    with dask.config.set({"array.chunk-size": "0.1Mb"}):
         a = np.arange(4 * 500 * 500).reshape(4, 500, 500)
         arr = da.from_array(a, chunks=(1, 500, 500))
-        arr._chunks = chunks
+        arr._chunks = ((1, 1, 1, 1), (np.nan,), (np.nan,))
         indexer = [0, 1] + [2] * 100 + [3]
         expected = a[indexer]
         result = arr[indexer]
@@ -1014,9 +1019,9 @@ def test_make_blockwise_sorted_slice():
     "size, chunks", [((100, 2), (50, 2)), ((100, 2), (37, 1)), ((100,), (55,))]
 )
 def test_shuffle_slice(size, chunks):
-    x = da.random.randint(0, 1000, size=size, chunks=chunks)
+    x = da.random.default_rng().integers(0, 1000, size=size, chunks=chunks)
     index = np.arange(len(x))
-    np.random.shuffle(index)
+    np.random.default_rng().shuffle(index)
 
     a = x[index]
     b = shuffle_slice(x, index)

@@ -8,7 +8,6 @@ import numpy as np
 
 import dask.array as da
 import dask.dataframe as dd
-from dask.dataframe._compat import PANDAS_GT_120
 from dask.dataframe.utils import assert_eq
 
 _BASE_UFUNCS = [
@@ -213,6 +212,28 @@ def test_ufunc_wrapped(ufunc):
     np.testing.assert_array_equal(dafunc(df), npfunc(df))
 
 
+def test_ufunc_wrapped_not_implemented():
+    s = pd.Series(
+        np.random.randint(1, 100, size=20), index=list("abcdefghijklmnopqrst")
+    )
+    ds = dd.from_pandas(s, 3)
+    with pytest.raises(NotImplementedError, match="`repeat` is not implemented"):
+        np.repeat(ds, 10)
+
+    df = pd.DataFrame(
+        {
+            "A": np.random.randint(1, 100, size=20),
+            "B": np.random.randint(1, 100, size=20),
+            "C": np.abs(np.random.randn(20)),
+        },
+        index=list("abcdefghijklmnopqrst"),
+    )
+    ddf = dd.from_pandas(df, 3)
+
+    with pytest.raises(NotImplementedError, match="`repeat` is not implemented"):
+        np.repeat(ddf, 10)
+
+
 _UFUNCS_2ARG = [
     "logaddexp",
     "logaddexp2",
@@ -252,7 +273,6 @@ _UFUNCS_2ARG = [
     ],
 )
 def test_ufunc_with_2args(ufunc, make_pandas_input):
-
     dafunc = getattr(da, ufunc)
     npfunc = getattr(np, ufunc)
 
@@ -301,7 +321,6 @@ def test_ufunc_with_2args(ufunc, make_pandas_input):
     ],
 )
 def test_clip(pandas, min, max):
-
     dask = dd.from_pandas(pandas, 3)
     pandas_type = pandas.__class__
     dask_type = dask.__class__
@@ -495,8 +514,7 @@ def test_ufunc_with_reduction(redfunc, ufunc, pandas):
     np_ufunc = getattr(np, ufunc)
 
     if (
-        PANDAS_GT_120
-        and (redfunc == "prod")
+        redfunc == "prod"
         and ufunc in ["conj", "square", "negative", "absolute"]
         and isinstance(pandas, pd.DataFrame)
     ):

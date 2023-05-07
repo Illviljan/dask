@@ -53,6 +53,8 @@ For performance, a good choice of ``chunks`` follows the following rules:
     if is useful to have Dask array chunks that are aligned with the chunking
     of your storage, often an even multiple times larger in each direction
 
+Learn more in `Choosing good chunk sizes in Dask`_ by Genevieve Buckley.
+
 
 Unknown Chunks
 --------------
@@ -63,7 +65,8 @@ following:
 
 .. code-block:: python
 
-   >>> x = da.from_array(np.random.randn(100), chunks=20)
+   >>> rng = np.random.default_rng()
+   >>> x = da.from_array(rng.standard_normal(100), chunks=20)
    >>> x += 0.1
    >>> y = x[x > 0]  # don't know how many values are greater than 0 ahead of time
 
@@ -367,3 +370,5 @@ These values can also be used when creating arrays with operations like
 
    >>> dask.array.ones((10000, 10000), chunks=(-1, 'auto'))
    dask.array<wrapped, shape=(10000, 10000), dtype=float64, chunksize=(10000, 1250), chunktype=numpy.ndarray>
+
+.. _`Choosing good chunk sizes in Dask`: https://blog.dask.org/2021/11/02/choosing-dask-chunk-sizes

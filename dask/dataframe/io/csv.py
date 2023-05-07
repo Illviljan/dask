@@ -6,9 +6,8 @@ from warnings import catch_warnings, simplefilter, warn
 try:
     import psutil
 except ImportError:
-    psutil = None
+    psutil = None  # type: ignore
 
-import fsspec.implementations.local
 import numpy as np
 import pandas as pd
 from fsspec.compression import compr
@@ -27,6 +26,7 @@ from pandas.api.types import (
 from dask.base import tokenize
 from dask.bytes import read_bytes
 from dask.core import flatten
+from dask.dataframe.backends import dataframe_creation_dispatch
 from dask.dataframe.io.io import from_map
 from dask.dataframe.io.utils import DataFrameIOFunction
 from dask.dataframe.utils import clear_known_categories
@@ -64,7 +64,11 @@ class CSVFunctionWrapper(DataFrameIOFunction):
 
     @property
     def columns(self):
-        return self.full_columns if self._columns is None else self._columns
+        if self._columns is None:
+            return self.full_columns
+        if self.colname:
+            return self._columns + [self.colname]
+        return self._columns
 
     def project_columns(self, columns):
         """Return a new CSVFunctionWrapper object with
@@ -74,11 +78,17 @@ class CSVFunctionWrapper(DataFrameIOFunction):
         columns = [c for c in self.head.columns if c in columns]
         if columns == self.columns:
             return self
+        if self.colname and self.colname not in columns:
+            # when path-as-column is on, we must keep it at IO
+            # whatever the selection
+            head = self.head[columns + [self.colname]]
+        else:
+            head = self.head[columns]
         return CSVFunctionWrapper(
             self.full_columns,
             columns,
             self.colname,
-            self.head[columns],
+            head,
             self.header,
             self.reader,
             {c: self.dtypes[c] for c in columns},
@@ -87,7 +97,6 @@ class CSVFunctionWrapper(DataFrameIOFunction):
         )
 
     def __call__(self, part):
-
         # Part will be a 3-element tuple
         block, path, is_first, is_last = part
 
@@ -106,7 +115,8 @@ class CSVFunctionWrapper(DataFrameIOFunction):
         write_header = False
         rest_kwargs = self.kwargs.copy()
         if not is_first:
-            write_header = True
+            if rest_kwargs.get("names", None) is None:
+                write_header = True
             rest_kwargs.pop("skiprows", None)
             if rest_kwargs.get("header", 0) is not None:
                 rest_kwargs.pop("header", None)
@@ -490,9 +500,9 @@ def read_pandas(
             "head(n=nrows)`".format(reader_name)
         )
     if isinstance(kwargs.get("skiprows"), int):
-        skiprows = lastskiprow = firstrow = kwargs.get("skiprows")
+        lastskiprow = firstrow = kwargs.get("skiprows")
     elif kwargs.get("skiprows") is None:
-        skiprows = lastskiprow = firstrow = 0
+        lastskiprow = firstrow = 0
     else:
         # When skiprows is a list, we expect more than max(skiprows) to
         # be included in the sample. This means that [0,2] will work well,
@@ -762,7 +772,12 @@ def make_reader(reader, reader_name, file_type):
     return read
 
 
-read_csv = make_reader(pd.read_csv, "read_csv", "CSV")
+read_csv = dataframe_creation_dispatch.register_inplace(
+    backend="pandas",
+    name="read_csv",
+)(make_reader(pd.read_csv, "read_csv", "CSV"))
+
+
 read_table = make_reader(pd.read_table, "read_table", "delimited")
 read_fwf = make_reader(pd.read_fwf, "read_fwf", "fixed-width")
 
@@ -832,59 +847,74 @@ def to_csv(
     >>> paths = ['/path/to/data/alice.csv', '/path/to/data/bob.csv', ...]  # doctest: +SKIP
     >>> df.to_csv(paths) # doctest: +SKIP
 
+    You can also provide a directory name:
+
+    >>> df.to_csv('/path/to/data') # doctest: +SKIP
+
+    The files will be numbered 0, 1, 2, (and so on) suffixed with '.part':
+
+    ::
+
+        /path/to/data/0.part
+        /path/to/data/1.part
+
     Parameters
     ----------
     df : dask.DataFrame
         Data to save
-    filename : string
-        Path glob indicating the naming scheme for the output files
+    filename : string or list
+        Absolute or relative filepath(s). Prefix with a protocol like ``s3://``
+        to save to remote filesystems.
     single_file : bool, default False
         Whether to save everything into a single CSV file. Under the
         single file mode, each partition is appended at the end of the
-        specified CSV file. Note that not all filesystems support the
-        append mode and thus the single file mode, especially on cloud
-        storage systems such as S3 or GCS. A warning will be issued when
-        writing to a file that is not backed by a local filesystem.
-    encoding : string, optional
-        A string representing the encoding to use in the output file,
-        defaults to 'ascii' on Python 2 and 'utf-8' on Python 3.
-    mode : str
-        Python write mode, default 'w'
+        specified CSV file.
+    encoding : string, default 'utf-8'
+        A string representing the encoding to use in the output file.
+    mode : str, default 'w'
+        Python file mode. The default is 'w' (or 'wt'), for writing
+        a new file or overwriting an existing file in text mode. 'a'
+        (or 'at') will append to an existing file in text mode or
+        create a new file if it does not already exist. See :py:func:`open`.
     name_function : callable, default None
         Function accepting an integer (partition index) and producing a
         string to replace the asterisk in the given filename globstring.
         Should preserve the lexicographic order of partitions. Not
-        supported when `single_file` is `True`.
+        supported when ``single_file`` is True.
     compression : string, optional
-        a string representing the compression to use in the output file,
+        A string representing the compression to use in the output file,
         allowed values are 'gzip', 'bz2', 'xz',
-        only used when the first argument is a filename
-    compute : bool
-        If true, immediately executes. If False, returns a set of delayed
+        only used when the first argument is a filename.
+    compute : bool, default True
+        If True, immediately executes. If False, returns a set of delayed
         objects, which can be computed at a later time.
     storage_options : dict
         Parameters passed on to the backend filesystem class.
-    header_first_partition_only : boolean, default None
-        If set to `True`, only write the header row in the first output
+    header_first_partition_only : bool, default None
+        If set to True, only write the header row in the first output
         file. By default, headers are written to all partitions under
-        the multiple file mode (`single_file` is `False`) and written
-        only once under the single file mode (`single_file` is `True`).
-        It must not be `False` under the single file mode.
+        the multiple file mode (``single_file`` is False) and written
+        only once under the single file mode (``single_file`` is True).
+        It must be True under the single file mode.
     compute_kwargs : dict, optional
         Options to be passed in to the compute method
     kwargs : dict, optional
-        Additional parameters to pass to `pd.DataFrame.to_csv()`
+        Additional parameters to pass to :meth:`pandas.DataFrame.to_csv`.
 
     Returns
     -------
-    The names of the file written if they were computed right away
-    If not, the delayed tasks associated to the writing of the files
+    The names of the file written if they were computed right away.
+    If not, the delayed tasks associated with writing the files.
 
     Raises
     ------
     ValueError
-        If `header_first_partition_only` is set to `False` or
-        `name_function` is specified when `single_file` is `True`.
+        If ``header_first_partition_only`` is set to False or
+        ``name_function`` is specified when ``single_file`` is True.
+
+    See Also
+    --------
+    fsspec.open_files
     """
     if single_file and name_function is not None:
         raise ValueError("name_function is not supported under the single file mode")
@@ -904,8 +934,6 @@ def to_csv(
     dfs = df.to_delayed()
     if single_file:
         first_file = open_file(filename, mode=mode, **file_options)
-        if not isinstance(first_file.fs, fsspec.implementations.local.LocalFileSystem):
-            warn("Appending data to a network storage system may not work.")
         value = to_csv_chunk(dfs[0], first_file, **kwargs)
         append_mode = mode.replace("w", "") + "a"
         append_file = open_file(filename, mode=append_mode, **file_options)

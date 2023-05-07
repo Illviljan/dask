@@ -1,10 +1,11 @@
 import builtins
 import contextlib
+import math
 import operator
+import warnings
 from collections.abc import Iterable
 from functools import partial
 from itertools import product, repeat
-from math import ceil, factorial, log, log2
 from numbers import Integral, Number
 
 import numpy as np
@@ -23,10 +24,9 @@ from dask.array.core import (
     unknown_chunk_message,
 )
 from dask.array.creation import arange, diagonal
-
-# Keep empty_lookup here for backwards compatibility
-from dask.array.dispatch import divide_lookup, empty_lookup  # noqa: F401
+from dask.array.dispatch import divide_lookup, nannumel_lookup, numel_lookup
 from dask.array.utils import (
+    array_safe,
     asarray_safe,
     compute_meta,
     is_arraylike,
@@ -37,13 +37,28 @@ from dask.array.wrap import ones, zeros
 from dask.base import tokenize
 from dask.blockwise import lol_tuples
 from dask.highlevelgraph import HighLevelGraph
-from dask.utils import deepmap, derived_from, funcname, getargspec, is_series_like
+from dask.utils import (
+    apply,
+    deepmap,
+    derived_from,
+    funcname,
+    getargspec,
+    is_series_like,
+)
 
 
 def divide(a, b, dtype=None):
     key = lambda x: getattr(x, "__array_priority__", float("-inf"))
     f = divide_lookup.dispatch(type(builtins.max(a, b, key=key)))
     return f(a, b, dtype=dtype)
+
+
+def numel(x, **kwargs):
+    return numel_lookup(x, **kwargs)
+
+
+def nannumel(x, **kwargs):
+    return nannumel_lookup(x, **kwargs)
 
 
 def reduction(
@@ -266,11 +281,11 @@ def _tree_reduce(
     depth = 1
     for i, n in enumerate(x.numblocks):
         if i in split_every and split_every[i] != 1:
-            depth = int(builtins.max(depth, ceil(log(n, split_every[i]))))
+            depth = int(builtins.max(depth, math.ceil(math.log(n, split_every[i]))))
     func = partial(combine or aggregate, axis=axis, keepdims=True)
     if concatenate:
         func = compose(func, partial(_concatenate2, axes=sorted(axis)))
-    for i in range(depth - 1):
+    for _ in range(depth - 1):
         x = partial_reduce(
             func,
             x,
@@ -395,7 +410,7 @@ def prod(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
     if dtype is not None:
         dt = dtype
     else:
-        dt = getattr(np.empty((1,), dtype=a.dtype).prod(), "dtype", object)
+        dt = getattr(np.ones((1,), dtype=a.dtype).prod(), "dtype", object)
     return reduction(
         a,
         chunk.prod,
@@ -413,14 +428,23 @@ def prod(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
 def min(a, axis=None, keepdims=False, split_every=None, out=None):
     return reduction(
         a,
+        chunk_min,
         chunk.min,
-        chunk.min,
+        combine=chunk_min,
         axis=axis,
         keepdims=keepdims,
         dtype=a.dtype,
         split_every=split_every,
         out=out,
     )
+
+
+def chunk_min(x, axis=None, keepdims=None):
+    """Version of np.min which ignores size 0 arrays"""
+    if x.size == 0:
+        return array_safe([], x, ndmin=x.ndim, dtype=x.dtype)
+    else:
+        return np.min(x, axis=axis, keepdims=keepdims)
 
 
 @implements(np.max, np.amax)
@@ -428,14 +452,23 @@ def min(a, axis=None, keepdims=False, split_every=None, out=None):
 def max(a, axis=None, keepdims=False, split_every=None, out=None):
     return reduction(
         a,
+        chunk_max,
         chunk.max,
-        chunk.max,
+        combine=chunk_max,
         axis=axis,
         keepdims=keepdims,
         dtype=a.dtype,
         split_every=split_every,
         out=out,
     )
+
+
+def chunk_max(x, axis=None, keepdims=None):
+    """Version of np.max which ignores size 0 arrays"""
+    if x.size == 0:
+        return array_safe([], x, ndmin=x.ndim, dtype=x.dtype)
+    else:
+        return np.max(x, axis=axis, keepdims=keepdims)
 
 
 @derived_from(np)
@@ -471,7 +504,7 @@ def nansum(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None)
     if dtype is not None:
         dt = dtype
     else:
-        dt = getattr(chunk.nansum(np.empty((1,), dtype=a.dtype)), "dtype", object)
+        dt = getattr(chunk.nansum(np.ones((1,), dtype=a.dtype)), "dtype", object)
     return reduction(
         a,
         chunk.nansum,
@@ -489,7 +522,7 @@ def nanprod(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None
     if dtype is not None:
         dt = dtype
     else:
-        dt = getattr(chunk.nansum(np.empty((1,), dtype=a.dtype)), "dtype", object)
+        dt = getattr(chunk.nansum(np.ones((1,), dtype=a.dtype)), "dtype", object)
     return reduction(
         a,
         chunk.nanprod,
@@ -576,7 +609,11 @@ def nanmin(a, axis=None, keepdims=False, split_every=None, out=None):
 
 def _nanmin_skip(x_chunk, axis, keepdims):
     if x_chunk.size > 0:
-        return np.nanmin(x_chunk, axis=axis, keepdims=keepdims)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", "All-NaN slice encountered", RuntimeWarning
+            )
+            return np.nanmin(x_chunk, axis=axis, keepdims=keepdims)
     else:
         return asarray_safe(
             np.array([], dtype=x_chunk.dtype), like=meta_from_array(x_chunk)
@@ -605,48 +642,15 @@ def nanmax(a, axis=None, keepdims=False, split_every=None, out=None):
 
 def _nanmax_skip(x_chunk, axis, keepdims):
     if x_chunk.size > 0:
-        return np.nanmax(x_chunk, axis=axis, keepdims=keepdims)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", "All-NaN slice encountered", RuntimeWarning
+            )
+            return np.nanmax(x_chunk, axis=axis, keepdims=keepdims)
     else:
         return asarray_safe(
             np.array([], dtype=x_chunk.dtype), like=meta_from_array(x_chunk)
         )
-
-
-def numel(x, **kwargs):
-    """A reduction to count the number of elements"""
-
-    if hasattr(x, "mask"):
-        return chunk.sum(np.ones_like(x), **kwargs)
-
-    shape = x.shape
-    keepdims = kwargs.get("keepdims", False)
-    axis = kwargs.get("axis", None)
-    dtype = kwargs.get("dtype", np.float64)
-
-    if axis is None:
-        prod = np.prod(shape, dtype=dtype)
-        return (
-            np.full_like(x, prod, shape=(1,) * len(shape), dtype=dtype)
-            if keepdims is True
-            else prod
-        )
-
-    if not isinstance(axis, tuple or list):
-        axis = [axis]
-
-    prod = np.prod([shape[dim] for dim in axis])
-    if keepdims is True:
-        new_shape = tuple(
-            shape[dim] if dim not in axis else 1 for dim in range(len(shape))
-        )
-    else:
-        new_shape = tuple(shape[dim] for dim in range(len(shape)) if dim not in axis)
-    return np.full_like(x, prod, shape=new_shape, dtype=dtype)
-
-
-def nannumel(x, **kwargs):
-    """A reduction to count the number of elements"""
-    return chunk.sum(~(np.isnan(x)), **kwargs)
 
 
 def mean_chunk(
@@ -727,7 +731,7 @@ def nanmean(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None
     if dtype is not None:
         dt = dtype
     else:
-        dt = getattr(np.mean(np.empty(shape=(1,), dtype=a.dtype)), "dtype", object)
+        dt = getattr(np.mean(np.ones(shape=(1,), dtype=a.dtype)), "dtype", object)
     return reduction(
         a,
         partial(mean_chunk, sum=chunk.nansum, numel=nannumel),
@@ -763,7 +767,7 @@ def _moment_helper(Ms, ns, inner_term, order, sum, axis, kwargs):
         ns * inner_term**order, axis=axis, **kwargs
     )
     for k in range(1, order - 1):
-        coeff = factorial(order) / (factorial(k) * factorial(order - k))
+        coeff = math.factorial(order) / (math.factorial(k) * math.factorial(order - k))
         M += coeff * sum(Ms[..., order - k - 2] * inner_term**k, axis=axis, **kwargs)
     return M
 
@@ -859,6 +863,41 @@ def moment_agg(
 def moment(
     a, order, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None
 ):
+    """Calculate the nth centralized moment.
+
+    Parameters
+    ----------
+    a : Array
+        Data over which to compute moment
+    order : int
+        Order of the moment that is returned, must be >= 2.
+    axis : int, optional
+        Axis along which the central moment is computed. The default is to
+        compute the moment of the flattened array.
+    dtype : data-type, optional
+        Type to use in computing the moment. For arrays of integer type the
+        default is float64; for arrays of float types it is the same as the
+        array type.
+    keepdims : bool, optional
+        If this is set to True, the axes which are reduced are left in the
+        result as dimensions with size one. With this option, the result
+        will broadcast correctly against the original array.
+    ddof : int, optional
+        "Delta Degrees of Freedom": the divisor used in the calculation is
+        N - ddof, where N represents the number of elements. By default
+        ddof is zero.
+
+    Returns
+    -------
+    moment : Array
+
+    References
+    ----------
+    .. [1] Pebay, Philippe (2008), "Formulas for Robust, One-Pass Parallel
+        Computation of Covariances and Arbitrary-Order Statistical Moments",
+        Technical Report SAND2008-6212, Sandia National Laboratories.
+
+    """
     if not isinstance(order, Integral) or order < 0:
         raise ValueError("Order must be an integer >= 0")
 
@@ -1313,7 +1352,7 @@ def prefixscan_blelloch(func, preop, binop, x, axis=None, dtype=None, out=None):
         x = x.flatten().rechunk(chunks=x.npartitions)
         axis = 0
     if dtype is None:
-        dtype = getattr(func(np.empty((0,), dtype=x.dtype)), "dtype", object)
+        dtype = getattr(func(np.ones((0,), dtype=x.dtype)), "dtype", object)
     assert isinstance(axis, Integral)
     axis = validate_axis(axis, x.ndim)
     name = f"{func.__name__}-{tokenize(func, axis, preop, binop, x, dtype)}"
@@ -1355,7 +1394,7 @@ def prefixscan_blelloch(func, preop, binop, x, axis=None, dtype=None, out=None):
         # Downsweep
         # With `n_vals == 3`, we would have `stride = 1` and `stride = 0`, but we need
         # to do a downsweep iteration, so make sure stride2 is at least 2.
-        stride2 = builtins.max(2, 2 ** ceil(log2(n_vals // 2)))
+        stride2 = builtins.max(2, 2 ** math.ceil(math.log2(n_vals // 2)))
         stride = stride2 // 2
         while stride > 0:
             for i in range(stride2 + stride - 1, n_vals, stride2):
@@ -1433,7 +1472,8 @@ def cumreduction(
           This method may be faster or more memory efficient depending on workload,
           scheduler, and hardware.  More benchmarking is necessary.
     preop: callable, optional
-        Function used by 'blelloch' method like ``np.cumsum->np.sum`` or ``np.cumprod->np.prod``
+        Function used by 'blelloch' method,
+        like ``np.cumsum->np.sum`` or ``np.cumprod->np.prod``
 
     Returns
     -------
@@ -1459,7 +1499,7 @@ def cumreduction(
         x = x.flatten().rechunk(chunks=x.npartitions)
         axis = 0
     if dtype is None:
-        dtype = getattr(func(np.empty((0,), dtype=x.dtype)), "dtype", object)
+        dtype = getattr(func(np.ones((0,), dtype=x.dtype)), "dtype", object)
     assert isinstance(axis, Integral)
     axis = validate_axis(axis, x.ndim)
 
@@ -1476,7 +1516,12 @@ def cumreduction(
     dsk = dict()
     for ind in indices:
         shape = tuple(x.chunks[i][ii] if i != axis else 1 for i, ii in enumerate(ind))
-        dsk[(name, "extra") + ind] = (np.full, shape, ident, m.dtype)
+        dsk[(name, "extra") + ind] = (
+            apply,
+            np.full_like,
+            (x._meta, ident, m.dtype),
+            {"shape": shape},
+        )
         dsk[(name,) + ind] = (m.name,) + ind
 
     for i in range(1, n):
@@ -1496,7 +1541,7 @@ def cumreduction(
             dsk[(name,) + ind] = (binop, this_slice, (m.name,) + ind)
 
     graph = HighLevelGraph.from_collections(name, dsk, dependencies=[m])
-    result = Array(graph, name, x.chunks, m.dtype)
+    result = Array(graph, name, x.chunks, m.dtype, meta=x._meta)
     return handle_out(out, result)
 
 

@@ -1,10 +1,20 @@
 import warnings
+from functools import partial
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_extension_array_dtype
 from tlz import partition
 
-from dask.dataframe._compat import PANDAS_GT_131
+from dask.dataframe._compat import (
+    PANDAS_GT_131,
+    PANDAS_GT_140,
+    PANDAS_GT_200,
+    check_apply_dataframe_deprecation,
+    check_applymap_dataframe_deprecation,
+    check_convert_dtype_deprecation,
+    check_observed_deprecation,
+)
 
 #  preserve compatibility while moving dispatch objects
 from dask.dataframe.dispatch import (  # noqa: F401
@@ -41,6 +51,17 @@ def loc(df, iindexer, cindexer=None):
 
 def iloc(df, cindexer=None):
     return df.iloc[:, cindexer]
+
+
+def apply(df, *args, **kwargs):
+    with check_convert_dtype_deprecation():
+        with check_apply_dataframe_deprecation():
+            return df.apply(*args, **kwargs)
+
+
+def applymap(df, *args, **kwargs):
+    with check_applymap_dataframe_deprecation():
+        return df.applymap(*args, **kwargs)
 
 
 def try_loc(df, iindexer, cindexer=None):
@@ -326,8 +347,9 @@ def cummax_aggregate(x, y):
 def assign(df, *pairs):
     # Only deep copy when updating an element
     # (to avoid modifying the original)
+    # Setitem never modifies an array inplace with pandas 1.4 and up
     pairs = dict(partition(2, pairs))
-    deep = bool(set(pairs) & set(df.columns))
+    deep = bool(set(pairs) & set(df.columns)) and not PANDAS_GT_140
     df = df.copy(deep=bool(deep))
     for name, val in pairs.items():
         df[name] = val
@@ -345,7 +367,8 @@ def unique(x, series_name=None):
 
 def value_counts_combine(x, sort=True, ascending=False, **groupby_kwargs):
     # sort and ascending don't actually matter until the agg step
-    return x.groupby(level=0, **groupby_kwargs).sum()
+    with check_observed_deprecation():
+        return x.groupby(level=0, **groupby_kwargs).sum()
 
 
 def value_counts_aggregate(
@@ -355,7 +378,9 @@ def value_counts_aggregate(
     if normalize:
         out /= total_length if total_length is not None else out.sum()
     if sort:
-        return out.sort_values(ascending=ascending)
+        out = out.sort_values(ascending=ascending)
+    if PANDAS_GT_200 and normalize:
+        out.name = "proportion"
     return out
 
 
@@ -368,7 +393,12 @@ def size(x):
 
 
 def values(df):
-    return df.values
+    values = df.values
+    # We currently only offer limited support for converting pandas extension
+    # dtypes to arrays. For now we simply convert to `object` dtype.
+    if is_extension_array_dtype(values):
+        values = values.astype(object)
+    return values
 
 
 def sample(df, state, frac, replace):
@@ -442,35 +472,44 @@ def assign_index(df, ind):
     return df
 
 
-def monotonic_increasing_chunk(x):
+def _monotonic_chunk(x, prop):
     if x.empty:
         # if input is empty, return empty df for chunk
         data = None
     else:
         data = x if is_index_like(x) else x.iloc
-        data = [[x.is_monotonic_increasing, data[0], data[-1]]]
+        data = [[getattr(x, prop), data[0], data[-1]]]
     return pd.DataFrame(data=data, columns=["monotonic", "first", "last"])
 
 
-def monotonic_increasing_aggregate(concatenated):
-    bounds_are_monotonic = pd.Series(
-        concatenated[["first", "last"]].to_numpy().ravel()
-    ).is_monotonic_increasing
-    return concatenated["monotonic"].all() and bounds_are_monotonic
-
-
-def monotonic_decreasing_chunk(x):
-    if x.empty:
-        # if input is empty, return empty df for chunk
+def _monotonic_combine(concatenated, prop):
+    if concatenated.empty:
         data = None
     else:
-        data = x if is_index_like(x) else x.iloc
-        data = [[x.is_monotonic_decreasing, data[0], data[-1]]]
-    return pd.DataFrame(data=data, columns=["monotonic", "first", "last"])
+        s = pd.Series(concatenated[["first", "last"]].to_numpy().ravel())
+        is_monotonic = concatenated["monotonic"].all() and getattr(s, prop)
+        data = [[is_monotonic, s.iloc[0], s.iloc[-1]]]
+    return pd.DataFrame(data, columns=["monotonic", "first", "last"])
 
 
-def monotonic_decreasing_aggregate(concatenated):
-    bounds_are_monotonic = pd.Series(
-        concatenated[["first", "last"]].to_numpy().ravel()
-    ).is_monotonic_decreasing
-    return concatenated["monotonic"].all() and bounds_are_monotonic
+def _monotonic_aggregate(concatenated, prop):
+    s = pd.Series(concatenated[["first", "last"]].to_numpy().ravel())
+    return concatenated["monotonic"].all() and getattr(s, prop)
+
+
+monotonic_increasing_chunk = partial(_monotonic_chunk, prop="is_monotonic_increasing")
+monotonic_decreasing_chunk = partial(_monotonic_chunk, prop="is_monotonic_decreasing")
+
+monotonic_increasing_combine = partial(
+    _monotonic_combine, prop="is_monotonic_increasing"
+)
+monotonic_decreasing_combine = partial(
+    _monotonic_combine, prop="is_monotonic_decreasing"
+)
+
+monotonic_increasing_aggregate = partial(
+    _monotonic_aggregate, prop="is_monotonic_increasing"
+)
+monotonic_decreasing_aggregate = partial(
+    _monotonic_aggregate, prop="is_monotonic_decreasing"
+)

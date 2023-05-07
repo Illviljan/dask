@@ -1,10 +1,12 @@
 import pandas as pd
+import pytest
 
 import dask
 import dask.dataframe as dd
 from dask.blockwise import Blockwise, optimize_blockwise
 from dask.dataframe._compat import tm
 from dask.dataframe.optimize import optimize_dataframe_getitem
+from dask.dataframe.utils import assert_eq, get_string_dtype
 
 
 def test_make_timeseries():
@@ -17,7 +19,7 @@ def test_make_timeseries():
     tm.assert_index_equal(df.columns, pd.Index(["A", "B", "C"]))
     assert df["A"].head().dtype == float
     assert df["B"].head().dtype == int
-    assert df["C"].head().dtype == object
+    assert df["C"].head().dtype == get_string_dtype()
     assert df.index.name == "timestamp"
     assert df.head().index.name == df.index.name
     assert df.divisions == tuple(pd.date_range(start="2000", end="2015", freq="6M"))
@@ -79,6 +81,7 @@ def test_make_timeseries_no_args():
     assert len(set(df.dtypes)) > 1
 
 
+@pytest.mark.skip_with_pyarrow_strings  # checks graph layers
 def test_make_timeseries_blockwise():
     df = dd.demo.make_timeseries()
     df = df[["x", "y"]]
@@ -157,3 +160,15 @@ def test_make_timeseries_getitem_compute():
     df3 = df2.compute()
     assert df3["y"].min() > 0
     assert list(df.columns) == list(df3.columns)
+
+
+def test_make_timeseries_column_projection():
+    ddf = dd.demo.make_timeseries(
+        "2001", "2002", freq="1D", partition_freq="3M", seed=42
+    )
+
+    assert_eq(ddf[["x"]].compute(), ddf.compute()[["x"]])
+    assert_eq(
+        ddf.groupby("name").aggregate({"x": "sum", "y": "max"}).compute(),
+        ddf.compute().groupby("name").aggregate({"x": "sum", "y": "max"}),
+    )

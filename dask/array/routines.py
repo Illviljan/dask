@@ -29,7 +29,6 @@ from dask.array.core import (
 )
 from dask.array.creation import arange, diag, empty, indices, tri
 from dask.array.einsumfuncs import einsum  # noqa
-from dask.array.numpy_compat import _numpy_120
 from dask.array.reductions import reduction
 from dask.array.ufunc import multiply, sqrt
 from dask.array.utils import (
@@ -52,8 +51,6 @@ _range = range
 
 @derived_from(np)
 def array(x, dtype=None, ndmin=None, *, like=None):
-    if not _numpy_120 and like is not None:
-        raise RuntimeError("The use of ``like`` required NumPy >= 1.20")
     x = asarray(x, like=like)
     while ndmin is not None and x.ndim < ndmin:
         x = x[None, :]
@@ -610,7 +607,7 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
     sl_2 = tuple(sl_2)
 
     r = a
-    for i in range(n):
+    for _ in range(n):
         r = r[sl_1] - r[sl_2]
 
     return r
@@ -684,7 +681,7 @@ def gradient(f, *varargs, axis=None, **kwargs):
             "Spacing must either be a single scalar, or a scalar / 1d-array per axis"
         )
 
-    if issubclass(f.dtype.type, (np.bool8, Integral)):
+    if issubclass(f.dtype.type, (np.bool_, Integral)):
         f = f.astype(float)
     elif issubclass(f.dtype.type, Real) and f.dtype.itemsize < 4:
         f = f.astype(float)
@@ -1934,6 +1931,13 @@ def squeeze(a, axis=None):
 
     sl = tuple(0 if i in axis else slice(None) for i, s in enumerate(a.shape))
 
+    # Return 0d Dask Array if all axes are squeezed,
+    # to be consistent with NumPy. Ref: https://github.com/dask/dask/issues/9183#issuecomment-1155626619
+    if all(s == 0 for s in sl) and all(s == 1 for s in a.shape):
+        return a.map_blocks(
+            np.squeeze, meta=a._meta, drop_axis=tuple(range(len(a.shape)))
+        )
+
     a = a[sl]
 
     return a
@@ -1941,7 +1945,6 @@ def squeeze(a, axis=None):
 
 @derived_from(np)
 def compress(condition, a, axis=None):
-
     if not is_arraylike(condition):
         # Allow `condition` to be anything array-like, otherwise ensure `condition`
         # is a numpy array.
@@ -2428,7 +2431,9 @@ def append(arr, values, axis=None):
     return concatenate((arr, values), axis=axis)
 
 
-def _average(a, axis=None, weights=None, returned=False, is_masked=False):
+def _average(
+    a, axis=None, weights=None, returned=False, is_masked=False, keepdims=False
+):
     # This was minimally modified from numpy.average
     # See numpy license at https://github.com/numpy/numpy/blob/master/LICENSE.txt
     # or NUMPY_LICENSE.txt within this directory
@@ -2436,7 +2441,7 @@ def _average(a, axis=None, weights=None, returned=False, is_masked=False):
     a = asanyarray(a)
 
     if weights is None:
-        avg = a.mean(axis)
+        avg = a.mean(axis, keepdims=keepdims)
         scl = avg.dtype.type(a.size / avg.size)
     else:
         wgt = asanyarray(weights)
@@ -2468,8 +2473,8 @@ def _average(a, axis=None, weights=None, returned=False, is_masked=False):
             from dask.array.ma import getmaskarray
 
             wgt = wgt * (~getmaskarray(a))
-        scl = wgt.sum(axis=axis, dtype=result_dtype)
-        avg = multiply(a, wgt, dtype=result_dtype).sum(axis) / scl
+        scl = wgt.sum(axis=axis, dtype=result_dtype, keepdims=keepdims)
+        avg = multiply(a, wgt, dtype=result_dtype).sum(axis, keepdims=keepdims) / scl
 
     if returned:
         if scl.shape != avg.shape:
@@ -2480,8 +2485,8 @@ def _average(a, axis=None, weights=None, returned=False, is_masked=False):
 
 
 @derived_from(np)
-def average(a, axis=None, weights=None, returned=False):
-    return _average(a, axis, weights, returned, is_masked=False)
+def average(a, axis=None, weights=None, returned=False, keepdims=False):
+    return _average(a, axis, weights, returned, is_masked=False, keepdims=keepdims)
 
 
 @derived_from(np)
@@ -2492,7 +2497,7 @@ def tril(m, k=0):
         k=k,
         dtype=bool,
         chunks=m.chunks[-2:],
-        like=meta_from_array(m) if _numpy_120 else None,
+        like=meta_from_array(m),
     )
 
     return where(mask, m, np.zeros_like(m, shape=(1,)))
@@ -2506,7 +2511,7 @@ def triu(m, k=0):
         k=k - 1,
         dtype=bool,
         chunks=m.chunks[-2:],
-        like=meta_from_array(m) if _numpy_120 else None,
+        like=meta_from_array(m),
     )
 
     return where(mask, np.zeros_like(m, shape=(1,)), m)

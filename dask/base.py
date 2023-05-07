@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import inspect
 import os
+import pathlib
 import pickle
 import threading
 import uuid
@@ -13,23 +14,25 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Executor
 from contextlib import contextmanager
+from enum import Enum
 from functools import partial
 from numbers import Integral, Number
 from operator import getitem
+from typing import Literal
 
 from packaging.version import parse as parse_version
 from tlz import curry, groupby, identity, merge
 from tlz.functoolz import Compose
 
-from dask import config, local, threaded
-from dask.compatibility import _PY_VERSION
-from dask.context import thread_state
+from dask import config, local
+from dask._compatibility import EMSCRIPTEN, PY_VERSION
 from dask.core import flatten
 from dask.core import get as simple_get
 from dask.core import literal, quote
 from dask.hashing import hash_buffer_hex
 from dask.system import CPU_COUNT
-from dask.utils import Dispatch, apply, ensure_dict, key_split
+from dask.typing import SchedulerGetCallable
+from dask.utils import Dispatch, apply, ensure_dict, is_namedtuple_instance, key_split
 
 __all__ = (
     "DaskMethodsMixin",
@@ -159,12 +162,30 @@ def annotate(**annotations):
 
 
 def is_dask_collection(x) -> bool:
-    """Returns ``True`` if ``x`` is a dask collection"""
-    return (
-        hasattr(x, "__dask_graph__")
-        and callable(x.__dask_graph__)
-        and not inspect.isclass(x)
-    )
+    """Returns ``True`` if ``x`` is a dask collection.
+
+    Parameters
+    ----------
+    x : Any
+        Object to test.
+
+    Returns
+    -------
+    result : bool
+        ``True`` if `x` is a Dask collection.
+
+    Notes
+    -----
+    The DaskCollection typing.Protocol implementation defines a Dask
+    collection as a class that returns a Mapping from the
+    ``__dask_graph__`` method. This helper function existed before the
+    implementation of the protocol.
+
+    """
+    try:
+        return x.__dask_graph__() is not None
+    except (AttributeError, TypeError):
+        return False
 
 
 class DaskMethodsMixin:
@@ -207,7 +228,7 @@ class DaskMethodsMixin:
 
         See Also
         --------
-        dask.base.visualize
+        dask.visualize
         dask.dot.dot_graph
 
         Notes
@@ -261,7 +282,7 @@ class DaskMethodsMixin:
 
         See Also
         --------
-        dask.base.persist
+        dask.persist
         """
         (result,) = persist(self, traverse=False, **kwargs)
         return result
@@ -288,7 +309,7 @@ class DaskMethodsMixin:
 
         See Also
         --------
-        dask.base.compute
+        dask.compute
         """
         (result,) = compute(self, traverse=False, **kwargs)
         return result
@@ -315,13 +336,8 @@ def compute_as_if_collection(cls, dsk, keys, scheduler=None, get=None, **kwargs)
     """Compute a graph as if it were of type cls.
 
     Allows for applying the same optimizations and default scheduler."""
-    from dask.highlevelgraph import HighLevelGraph
-
     schedule = get_scheduler(scheduler=scheduler, cls=cls, get=get)
     dsk2 = optimization_function(cls)(dsk, keys, **kwargs)
-    # see https://github.com/dask/dask/issues/8991.
-    # This merge should be removed once the underlying issue is fixed.
-    dsk2 = HighLevelGraph.merge(dsk2)
     return schedule(dsk2, keys, **kwargs)
 
 
@@ -446,6 +462,8 @@ def unpack_collections(*args, traverse=True):
                         ],
                     ),
                 )
+            elif is_namedtuple_instance(expr):
+                tsk = (typ, *[_unpack(i) for i in expr])
             else:
                 return expr
 
@@ -492,11 +510,11 @@ def optimize(*args, traverse=True, **kwargs):
 
     Examples
     --------
-    >>> import dask as d
+    >>> import dask
     >>> import dask.array as da
     >>> a = da.arange(10, chunks=2).sum()
     >>> b = da.arange(10, chunks=2).mean()
-    >>> a2, b2 = d.optimize(a, b)
+    >>> a2, b2 = dask.optimize(a, b)
 
     >>> a2.compute() == a.compute()
     True
@@ -549,16 +567,16 @@ def compute(
 
     Examples
     --------
-    >>> import dask as d
+    >>> import dask
     >>> import dask.array as da
     >>> a = da.arange(10, chunks=2).sum()
     >>> b = da.arange(10, chunks=2).mean()
-    >>> d.compute(a, b)
+    >>> dask.compute(a, b)
     (45, 4.5)
 
     By default, dask objects inside python collections will also be computed:
 
-    >>> d.compute({'a': a, 'b': b, 'c': 1})
+    >>> dask.compute({'a': a, 'b': b, 'c': 1})
     ({'a': 45, 'b': 4.5, 'c': 1},)
     """
 
@@ -583,7 +601,13 @@ def compute(
 
 
 def visualize(
-    *args, filename="mydask", traverse=True, optimize_graph=False, maxval=None, **kwargs
+    *args,
+    filename="mydask",
+    traverse=True,
+    optimize_graph=False,
+    maxval=None,
+    engine: Literal["cytoscape", "ipycytoscape", "graphviz"] | None = None,
+    **kwargs,
 ):
     """
     Visualize several dask graphs simultaneously.
@@ -637,8 +661,12 @@ def visualize(
     verbose : bool, optional
         Whether to label output and input boxes even if the data aren't chunked.
         Beware: these labels can get very long. Default is False.
+    engine : {"graphviz", "ipycytoscape", "cytoscape"}, optional.
+        The visualization engine to use. If not provided, this checks the dask config
+        value "visualization.engine". If that is not set, it tries to import ``graphviz``
+        and ``ipycytoscape``, using the first one to succeed.
     **kwargs
-       Additional keyword arguments to forward to ``to_graphviz``.
+       Additional keyword arguments to forward to the visualization engine.
 
     Examples
     --------
@@ -660,8 +688,6 @@ def visualize(
 
     https://docs.dask.org/en/latest/optimize.html
     """
-    from dask.dot import dot_graph
-
     args, _ = unpack_collections(*args, traverse=traverse)
 
     dsk = dict(collections_to_dsk(args, optimize_graph=optimize_graph))
@@ -689,7 +715,7 @@ def visualize(
         try:
             cmap = kwargs.pop("cmap")
         except KeyError:
-            cmap = plt.cm.RdBu
+            cmap = plt.cm.plasma
         if isinstance(cmap, str):
             import matplotlib.pyplot as plt
 
@@ -747,7 +773,37 @@ def visualize(
     elif color:
         raise NotImplementedError("Unknown value color=%s" % color)
 
-    return dot_graph(dsk, filename=filename, **kwargs)
+    # Determine which engine to dispatch to, first checking the kwarg, then config,
+    # then whichever of graphviz or ipycytoscape are installed, in that order.
+    engine = engine or config.get("visualization.engine", None)
+
+    if not engine:
+        try:
+            import graphviz  # noqa: F401
+
+            engine = "graphviz"
+        except ImportError:
+            try:
+                import ipycytoscape  # noqa: F401
+
+                engine = "cytoscape"
+            except ImportError:
+                pass
+
+    if engine == "graphviz":
+        from dask.dot import dot_graph
+
+        return dot_graph(dsk, filename=filename, **kwargs)
+    elif engine in ("cytoscape", "ipycytoscape"):
+        from dask.dot import cytoscape_graph
+
+        return cytoscape_graph(dsk, filename=filename, **kwargs)
+    elif engine is None:
+        raise RuntimeError(
+            "No visualization engine detected, please install graphviz or ipycytoscape"
+        )
+    else:
+        raise ValueError(f"Visualization engine {engine} not recognized")
 
 
 def persist(*args, traverse=True, optimize_graph=True, scheduler=None, **kwargs):
@@ -853,7 +909,7 @@ def persist(*args, traverse=True, optimize_graph=True, scheduler=None, **kwargs)
 
 # Pass `usedforsecurity=False` for Python 3.9+ to support FIPS builds of Python
 _md5: Callable
-if _PY_VERSION >= parse_version("3.9"):
+if PY_VERSION >= parse_version("3.9"):
 
     def _md5(x, _hashlib_md5=hashlib.md5):
         return _hashlib_md5(x, usedforsecurity=False)
@@ -890,6 +946,10 @@ normalize_token.register(
         complex,
         type(Ellipsis),
         datetime.date,
+        datetime.time,
+        datetime.datetime,
+        datetime.timedelta,
+        pathlib.PurePath,
     ),
     identity,
 )
@@ -911,7 +971,7 @@ def normalize_set(s):
 
 
 def _normalize_seq_func(seq):
-    # Defined outside normalize_seq to avoid unneccessary redefinitions and
+    # Defined outside normalize_seq to avoid unnecessary redefinitions and
     # therefore improving computation times.
     try:
         return list(map(normalize_token, seq))
@@ -939,6 +999,11 @@ def normalize_literal(lit):
 @normalize_token.register(range)
 def normalize_range(r):
     return list(map(normalize_token, [r.start, r.stop, r.step]))
+
+
+@normalize_token.register(Enum)
+def normalize_enum(e):
+    return type(e).__name__, e.name, e.value
 
 
 @normalize_token.register(object)
@@ -1004,12 +1069,19 @@ def _normalize_function(func: Callable) -> tuple | str | bytes:
                 return result
         except Exception:
             pass
-        try:
-            import cloudpickle
+        if not config.get("tokenize.ensure-deterministic"):
+            try:
+                import cloudpickle
 
-            return cloudpickle.dumps(func, protocol=4)
-        except Exception:
-            return str(func)
+                return cloudpickle.dumps(func, protocol=4)
+            except Exception:
+                return str(func)
+        else:
+            raise RuntimeError(
+                f"Function {str(func)} may not be deterministically hashed by "
+                "cloudpickle. See: https://github.com/cloudpipe/cloudpickle/issues/385 "
+                "for more information."
+            )
 
 
 def normalize_dataclass(obj):
@@ -1025,8 +1097,6 @@ def normalize_dataclass(obj):
 @normalize_token.register_lazy("pandas")
 def register_pandas():
     import pandas as pd
-
-    PANDAS_GT_130 = parse_version(pd.__version__) >= parse_version("1.3.0")
 
     @normalize_token.register(pd.Index)
     def normalize_index(ind):
@@ -1071,16 +1141,8 @@ def register_pandas():
 
     @normalize_token.register(pd.DataFrame)
     def normalize_dataframe(df):
-        mgr = df._data
-
-        if PANDAS_GT_130:
-            # for compat with ArrayManager, pandas 1.3.0 introduced a `.arrays`
-            # attribute that returns the column arrays/block arrays for both
-            # BlockManager and ArrayManager
-            data = list(mgr.arrays)
-        else:
-            data = [block.values for block in mgr.blocks]
-        data.extend([df.columns, df.index])
+        mgr = df._mgr
+        data = list(mgr.arrays) + [df.columns, df.index]
         return list(map(normalize_token, data))
 
     @normalize_token.register(pd.api.extensions.ExtensionArray)
@@ -1116,8 +1178,8 @@ def register_numpy():
                 offset = 0  # root memmap's have mmap object as base
             if hasattr(
                 x, "offset"
-            ):  # offset numpy used while opening, and not the offset to the beginning of the file
-                offset += getattr(x, "offset")
+            ):  # offset numpy used while opening, and not the offset to the beginning of file
+                offset += x.offset
             return (
                 x.filename,
                 os.path.getmtime(x.filename),
@@ -1175,6 +1237,10 @@ def register_numpy():
         except AttributeError:
             return normalize_function(x)
 
+    @normalize_token.register(np.random.BitGenerator)
+    def normalize_bit_generator(bg):
+        return normalize_token(bg.state)
+
 
 @normalize_token.register_lazy("scipy")
 def register_scipy():
@@ -1220,19 +1286,24 @@ def _colorize(t):
     return "#" + h
 
 
-named_schedulers = {
+named_schedulers: dict[str, SchedulerGetCallable] = {
     "sync": local.get_sync,
     "synchronous": local.get_sync,
     "single-threaded": local.get_sync,
-    "threads": threaded.get,
-    "threading": threaded.get,
 }
 
-try:
+if not EMSCRIPTEN:
+    from dask import threaded
+
+    named_schedulers.update(
+        {
+            "threads": threaded.get,
+            "threading": threaded.get,
+        }
+    )
+
     from dask import multiprocessing as dask_multiprocessing
-except ImportError:
-    pass
-else:
+
     named_schedulers.update(
         {
             "processes": dask_multiprocessing.get,
@@ -1268,7 +1339,8 @@ def get_scheduler(get=None, scheduler=None, collections=None, cls=None):
 
     1.  Passing in scheduler= parameters
     2.  Passing these into global configuration
-    3.  Using defaults of a dask collection
+    3.  Using a dask.distributed default Client
+    4.  Using defaults of a dask collection
 
     This function centralizes the logic to determine the right scheduler to use
     from those many options
@@ -1284,14 +1356,25 @@ def get_scheduler(get=None, scheduler=None, collections=None, cls=None):
         elif isinstance(scheduler, str):
             scheduler = scheduler.lower()
 
+            try:
+                from distributed import Client
+
+                Client.current(allow_global=True)
+                client_available = True
+            except (ImportError, ValueError):
+                client_available = False
             if scheduler in named_schedulers:
-                if config.get("scheduler", None) in ("dask.distributed", "distributed"):
+                if client_available:
                     warnings.warn(
                         "Running on a single-machine scheduler when a distributed client "
                         "is active might lead to unexpected results."
                     )
                 return named_schedulers[scheduler]
             elif scheduler in ("dask.distributed", "distributed"):
+                if not client_available:
+                    raise RuntimeError(
+                        f"Requested {scheduler} scheduler but no Client active."
+                    )
                 from distributed.worker import get_client
 
                 return get_client().get
@@ -1319,10 +1402,12 @@ def get_scheduler(get=None, scheduler=None, collections=None, cls=None):
     if config.get("get", None):
         raise ValueError(get_err_msg)
 
-    if getattr(thread_state, "key", False):
-        from distributed.worker import get_worker
+    try:
+        from distributed import get_client
 
-        return get_worker().client.get
+        return get_client().get
+    except (ImportError, ValueError):
+        pass
 
     if cls is not None:
         return cls.__dask_scheduler__

@@ -289,6 +289,7 @@ Array
    Array.store
    Array.sum
    Array.swapaxes
+   Array.to_backend
    Array.to_dask_dataframe
    Array.to_delayed
    Array.to_hdf5
@@ -356,6 +357,7 @@ Masked Arrays
    :toctree: generated/
 
    ma.average
+   ma.empty_like
    ma.filled
    ma.fix_invalid
    ma.getdata
@@ -372,7 +374,11 @@ Masked Arrays
    ma.masked_outside
    ma.masked_values
    ma.masked_where
+   ma.nonzero
+   ma.ones_like
    ma.set_fill_value
+   ma.where
+   ma.zeros_like
 
 Random
 ~~~~~~
@@ -384,16 +390,20 @@ Random
    random.binomial
    random.chisquare
    random.choice
+   random.default_rng
    random.exponential
    random.f
    random.gamma
    random.geometric
    random.gumbel
    random.hypergeometric
+   random.integers
    random.laplace
    random.logistic
    random.lognormal
    random.logseries
+   random.multinomial
+   random.multivariate_hypergeometric
    random.negative_binomial
    random.noncentral_chisquare
    random.noncentral_f
@@ -404,6 +414,7 @@ Random
    random.power
    random.randint
    random.random
+   random.random_integers
    random.random_sample
    random.rayleigh
    random.standard_cauchy

@@ -184,6 +184,12 @@ those on Hadoop, HPC, Kubernetes, and Cloud clusters.
 
     For more information see :doc:`deploying-kubernetes`
 
+4. **Commercial Dask deployment:**
+
+   - You can use `Coiled <https://coiled.io/>`_ to handle the creation and management of Dask clusters on cloud computing environments (AWS and GCP).
+   - `Domino Data Lab <https://www.dominodatalab.com/>`_ Lets users create Dask clusters in a hosted platform.
+   - `Saturn Cloud <https://saturncloud.io/>`_ Lets users create Dask clusters in a hosted platform or within their own AWS accounts.
+
 
 Is Dask secure?
 ~~~~~~~~~~~~~~~
@@ -191,7 +197,7 @@ Is Dask secure?
 Dask is deployed today within highly secure institutions,
 including major financial, healthcare, and government agencies.
 
-That being said it's worth noting that, by it's very nature, Dask enables the
+That being said it's worth noting that, by its very nature, Dask enables the
 execution of arbitrary user code on a large set of machines. Care should be
 taken to isolate, authenticate, and govern access to these machines.  Fortunately,
 your institution likely already does this and uses standard technologies like
@@ -226,6 +232,8 @@ the cluster.  This is particularly common in Cloudera/Hortonworks Hadoop/Spark d
 In these cases some level of explicit indirection may be required.  For this, we
 recommend the `Dask Gateway project <https://gateway.dask.org>`_, which uses IT-level
 permissions to properly route authenticated users into secure resources.
+
+You may also want to consider a managed cluster solution (see :ref:`managed-cluster-solutions`).
 
 
 How do I manage software environments?
@@ -336,7 +344,7 @@ can be surprising.
 
 Our main solution to build this intuition, other than
 accumulated experience, is Dask's :doc:`Diagnostic Dashboard
-<diagnostics-distributed>`.
+<dashboard>`.
 The dashboard delivers a ton of visual feedback to users as they are running
 their computation to help them understand what is going on.  This both helps
 them to identify and resolve immediate bottlenecks, and also builds up that

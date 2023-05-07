@@ -47,7 +47,6 @@ def to_uri(path):
 
 
 def test_unordered_urlpath_errors():
-
     # Unordered urlpath argument
     with pytest.raises(TypeError):
         read_bytes(
@@ -188,7 +187,7 @@ def test_read_bytes_delimited():
             assert ours == test
 
 
-fmt_bs = [(fmt, None) for fmt in compr] + [(fmt, 10) for fmt in compr]  # type: ignore
+fmt_bs = [(fmt, None) for fmt in compr] + [(fmt, 10) for fmt in compr]
 
 
 @pytest.mark.parametrize("fmt,blocksize", fmt_bs)

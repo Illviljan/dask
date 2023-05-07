@@ -1,16 +1,13 @@
 Futures
 =======
 
+.. meta::
+    :description: Dask futures reimplements the Python futures API so you can scale your Python futures workflow across a Dask cluster.
+
 Dask supports a real-time task framework that extends Python's
 `concurrent.futures <https://docs.python.org/3/library/concurrent.futures.html>`_
-interface.  This interface is good for arbitrary task scheduling like
-:doc:`dask.delayed <delayed>`, but is immediate rather than lazy, which
-provides some more flexibility in situations where the computations may evolve
-over time.
-
-These features depend on the second generation task scheduler found in
-`dask.distributed <https://distributed.dask.org/en/latest>`_ (which,
-despite its name, runs very well on a single machine).
+interface. Dask futures allow you to scale generic Python workflows across
+a Dask cluster with minimal code changes.
 
 .. raw:: html
 
@@ -23,6 +20,14 @@ despite its name, runs very well on a single machine).
            allowfullscreen></iframe>
 
 .. currentmodule:: distributed
+
+This interface is good for arbitrary task scheduling like
+:doc:`dask.delayed <delayed>`, but is immediate rather than lazy, which
+provides some more flexibility in situations where the computations may evolve
+over time. These features depend on the second generation task scheduler found in
+`dask.distributed <https://distributed.dask.org/en/latest>`_ (which,
+despite its name, runs very well on a single machine).
+
 
 Examples
 --------
@@ -824,7 +829,7 @@ The client will calculate the gradient of the loss function above.
    ps_future = client.submit(ParameterServer, actor=True)
    ps = ps_future.result()
 
-   ps.put('parameters', np.random.random(1000))
+   ps.put('parameters', np.random.default_rng().random(1000))
    for k in range(20):
        params = ps.get('parameters').result()
        new_params = train(params)
@@ -853,6 +858,12 @@ All operations that require talking to the remote worker are awaitable:
 
        n = await counter.n  # attribute access also must be awaited
 
+Generally, all I/O operations that trigger computations (e.g. ``to_parquet``) should be done using the ``compute=False``
+parameter to avoid asynchronous blocking:
+
+.. code-block:: python
+
+   await client.compute(ddf.to_parquet('/tmp/some.parquet', compute=False))
 
 API
 ---
@@ -932,6 +943,9 @@ API
    :members:
 
 .. autoclass:: Event
+   :members:
+
+.. autoclass:: Semaphore
    :members:
 
 .. autoclass:: Pub

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import dask.array as da
+from dask.array.numpy_compat import _numpy_123
 from dask.array.utils import assert_eq
 from dask.base import tokenize
 
@@ -80,7 +81,7 @@ functions = [
 
 @pytest.mark.parametrize("func", functions)
 def test_basic(func):
-    x = da.random.random((2, 3, 4), chunks=(1, 2, 2))
+    x = da.random.default_rng().random((2, 3, 4), chunks=(1, 2, 2))
     x[x < 0.4] = 0
 
     y = da.ma.masked_equal(x, 0)
@@ -96,9 +97,10 @@ def test_basic(func):
 
 
 def test_tensordot():
-    x = da.random.random((2, 3, 4), chunks=(1, 2, 2))
+    rng = da.random.default_rng()
+    x = rng.random((2, 3, 4), chunks=(1, 2, 2))
     x[x < 0.4] = 0
-    y = da.random.random((4, 3, 2), chunks=(2, 2, 1))
+    y = rng.random((4, 3, 2), chunks=(2, 2, 1))
     y[y < 0.4] = 0
 
     xx = da.ma.masked_equal(x, 0)
@@ -121,8 +123,9 @@ def test_tensordot():
 @pytest.mark.parametrize("func", functions)
 @pytest.mark.filterwarnings("ignore::numpy.ComplexWarning")  # abs() in assert_eq
 def test_mixed_concatenate(func):
-    x = da.random.random((2, 3, 4), chunks=(1, 2, 2))
-    y = da.random.random((2, 3, 4), chunks=(1, 2, 2))
+    rng = da.random.default_rng()
+    x = rng.random((2, 3, 4), chunks=(1, 2, 2))
+    y = rng.random((2, 3, 4), chunks=(1, 2, 2))
 
     y[y < 0.4] = 0
     yy = da.ma.masked_equal(y, 0)
@@ -138,7 +141,7 @@ def test_mixed_concatenate(func):
 @pytest.mark.parametrize("func", functions)
 @pytest.mark.filterwarnings("ignore::numpy.ComplexWarning")  # abs() in assert_eq
 def test_mixed_random(func):
-    d = da.random.random((4, 3, 4), chunks=(1, 2, 2))
+    d = da.random.default_rng().random((4, 3, 4), chunks=(1, 2, 2))
     d[d < 0.4] = 0
 
     fn = lambda x: np.ma.masked_equal(x, 0) if random.random() < 0.5 else x
@@ -151,7 +154,7 @@ def test_mixed_random(func):
 
 
 def test_mixed_output_type():
-    y = da.random.random((10, 10), chunks=(5, 5))
+    y = da.random.default_rng().random((10, 10), chunks=(5, 5))
     y[y < 0.4] = 0
 
     y = da.ma.masked_equal(y, 0)
@@ -170,7 +173,7 @@ def test_creation_functions():
     dy = da.from_array(y, chunks=4)
 
     sol = np.ma.masked_greater(x, y)
-    for (a, b) in product([dx, x], [dy, y]):
+    for a, b in product([dx, x], [dy, y]):
         assert_eq(da.ma.masked_greater(a, b), sol)
 
     # These are all the same as masked_greater, just check for correct op
@@ -242,7 +245,7 @@ def assert_eq_ma(a, b):
     "reduction", ["sum", "prod", "mean", "var", "std", "min", "max", "any", "all"]
 )
 def test_reductions(dtype, reduction):
-    x = (np.random.RandomState(42).rand(11, 11) * 10).astype(dtype)
+    x = (np.random.default_rng(42).random((11, 11)) * 10).astype(dtype)
     dx = da.from_array(x, chunks=(4, 4))
     mx = np.ma.masked_greater(x, 5)
     mdx = da.ma.masked_greater(dx, 5)
@@ -281,7 +284,7 @@ def test_reductions_allmasked(dtype, reduction):
 
 @pytest.mark.parametrize("reduction", ["argmin", "argmax"])
 def test_arg_reductions(reduction):
-    x = np.random.random((10, 10, 10))
+    x = np.random.default_rng().random((10, 10, 10))
     dx = da.from_array(x, chunks=(3, 4, 5))
     mx = np.ma.masked_greater(x, 0.4)
     dmx = da.ma.masked_greater(dx, 0.4)
@@ -296,7 +299,7 @@ def test_arg_reductions(reduction):
 
 
 def test_cumulative():
-    x = np.random.RandomState(0).rand(20, 24, 13)
+    x = np.random.default_rng(0).random((20, 24, 13))
     dx = da.from_array(x, chunks=(6, 5, 4))
     mx = np.ma.masked_greater(x, 0.4)
     dmx = da.ma.masked_greater(dx, 0.4)
@@ -307,7 +310,7 @@ def test_cumulative():
 
 
 def test_accessors():
-    x = np.random.random((10, 10))
+    x = np.random.default_rng().random((10, 10))
     dx = da.from_array(x, chunks=(3, 4))
     mx = np.ma.masked_greater(x, 0.4)
     dmx = da.ma.masked_greater(dx, 0.4)
@@ -319,7 +322,7 @@ def test_accessors():
 
 
 def test_masked_array():
-    x = np.random.random((10, 10)).astype("f4")
+    x = np.random.default_rng().random((10, 10)).astype("f4")
     dx = da.from_array(x, chunks=(3, 4))
     f1 = da.from_array(np.array(1), chunks=())
 
@@ -349,7 +352,7 @@ def test_masked_array():
 
 
 def test_set_fill_value():
-    x = np.random.randint(0, 10, (10, 10))
+    x = np.random.default_rng().integers(0, 10, (10, 10))
     dx = da.from_array(x, chunks=(3, 4))
     mx = np.ma.masked_greater(x, 3)
     dmx = da.ma.masked_greater(dx, 3)
@@ -369,7 +372,8 @@ def test_set_fill_value():
         da.ma.set_fill_value(dmx, dx)
 
 
-def test_average_weights_with_masked_array():
+@pytest.mark.parametrize("keepdims", [False, True])
+def test_average_weights_with_masked_array(keepdims):
     mask = np.array([[True, False], [True, True], [False, True]])
     data = np.arange(6).reshape((3, 2))
     a = np.ma.array(data, mask=mask)
@@ -378,10 +382,12 @@ def test_average_weights_with_masked_array():
     weights = np.array([0.25, 0.75])
     d_weights = da.from_array(weights, chunks=2)
 
-    np_avg = np.ma.average(a, weights=weights, axis=1)
-    da_avg = da.ma.average(d_a, weights=d_weights, axis=1)
+    da_avg = da.ma.average(d_a, weights=d_weights, axis=1, keepdims=keepdims)
 
-    assert_eq(np_avg, da_avg)
+    if _numpy_123:
+        assert_eq(da_avg, np.ma.average(a, weights=weights, axis=1, keepdims=keepdims))
+    elif not keepdims:
+        assert_eq(da_avg, np.ma.average(a, weights=weights, axis=1))
 
 
 def test_arithmetic_results_in_masked():
@@ -423,3 +429,78 @@ def test_count():
         res = da.ma.count(dx, axis=axis)
         sol = np.ma.count(x, axis=axis)
         assert_eq(res, sol, check_dtype=sys.platform != "win32")
+
+
+@pytest.mark.parametrize("funcname", ["ones_like", "zeros_like", "empty_like"])
+def test_like_funcs(funcname):
+    mask = np.array([[True, False], [True, True], [False, True]])
+    data = np.arange(6).reshape((3, 2))
+    a = np.ma.array(data, mask=mask)
+    d_a = da.ma.masked_array(data=data, mask=mask, chunks=2)
+
+    da_func = getattr(da.ma, funcname)
+    np_func = getattr(np.ma.core, funcname)
+
+    res = da_func(d_a)
+    sol = np_func(a)
+
+    if "empty" in funcname:
+        assert_eq(da.ma.getmaskarray(res), np.ma.getmaskarray(sol))
+    else:
+        assert_eq(res, sol)
+
+
+def test_nonzero():
+    data = np.arange(9).reshape((3, 3))
+    mask = np.array([[True, False, False], [True, True, False], [True, False, True]])
+    a = np.ma.array(data, mask=mask)
+    d_a = da.ma.masked_array(data=data, mask=mask, chunks=2)
+
+    for c1, c2 in [
+        (a > 4, d_a > 4),
+        (a, d_a),
+        (a <= -2, d_a <= -2),
+        (a == 0, d_a == 0),
+    ]:
+        sol = np.ma.nonzero(c1)
+        res = da.ma.nonzero(c2)
+
+        assert isinstance(res, type(sol))
+        assert len(res) == len(sol)
+
+        for i in range(len(sol)):
+            assert_eq(res[i], sol[i])
+
+
+def test_where():
+    rng = np.random.default_rng()
+    # Copied and adapted from the da.where test.
+    x = rng.integers(10, size=(15, 14))
+    mask = rng.choice(a=[False, True], size=(15, 14), p=[0.5, 0.5])
+    x[5, 5] = x[4, 4] = 0  # Ensure some false elements
+    d = da.ma.masked_array(x, mask=mask, chunks=(4, 5))
+    x = np.ma.array(x, mask=mask)
+    y = rng.integers(10, size=15).astype(np.uint8)
+    e = da.from_array(y, chunks=(4,))
+
+    # Nonzero test
+    sol = np.ma.where(x)
+    res = da.ma.where(d)
+    for i in range(len(sol)):
+        assert_eq(res[i], sol[i])
+
+    for c1, c2 in [
+        (d > 5, x > 5),
+        (d, x),
+        (1, 1),
+        (5, 5),
+        (True, True),
+        (np.True_, np.True_),
+        (0, 0),
+        (False, False),
+        (np.False_, np.False_),
+    ]:
+        for b1, b2 in [(0, 0), (-e[:, None], -y[:, None]), (e[:14], y[:14])]:
+            w1 = da.ma.where(c1, d, b1)
+            w2 = np.ma.where(c2, x, b2)
+            assert_eq(w1, w2)

@@ -5,10 +5,13 @@ import shutil
 import tempfile
 import uuid
 import warnings
+from collections.abc import Sequence
+from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import tlz as toolz
+from pandas.api.types import is_numeric_dtype
 
 from dask import config
 from dask.base import compute, compute_as_if_collection, is_dask_collection, tokenize
@@ -19,19 +22,20 @@ from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.highlevelgraph import HighLevelGraph
 from dask.layers import ShuffleLayer, SimpleShuffleLayer
 from dask.sizeof import sizeof
-from dask.utils import M, digit
+from dask.utils import M, digit, get_default_shuffle_algorithm
 
 logger = logging.getLogger(__name__)
 
 
 def _calculate_divisions(
-    df,
-    partition_col,
-    repartition,
-    npartitions,
-    upsample=1.0,
-    partition_size=128e6,
-):
+    df: DataFrame,
+    partition_col: Series,
+    repartition: bool,
+    npartitions: int,
+    upsample: float = 1.0,
+    partition_size: float = 128e6,
+    ascending: bool = True,
+) -> Tuple[List, List, List, bool]:
     """
     Utility function to calculate divisions for calls to `map_partitions`
     """
@@ -39,64 +43,98 @@ def _calculate_divisions(
     divisions = partition_col._repartition_quantiles(npartitions, upsample=upsample)
     mins = partition_col.map_partitions(M.min)
     maxes = partition_col.map_partitions(M.max)
-    divisions, sizes, mins, maxes = compute(divisions, sizes, mins, maxes)
-    divisions = methods.tolist(divisions)
-    if type(sizes) is not list:
-        sizes = methods.tolist(sizes)
-    mins = methods.tolist(mins)
-    maxes = methods.tolist(maxes)
 
-    empty_dataframe_detected = pd.isnull(divisions).all()
+    try:
+        divisions, sizes, mins, maxes = compute(divisions, sizes, mins, maxes)
+    except TypeError as e:
+        # When there are nulls and a column is non-numeric, a TypeError is sometimes raised as a result of
+        # 1) computing mins/maxes above, 2) every null being switched to NaN, and 3) NaN being a float.
+        # Also, Pandas ExtensionDtypes may cause TypeErrors when dealing with special nulls such as pd.NaT or pd.NA.
+        # If this happens, we hint the user about eliminating nulls beforehand.
+        if not is_numeric_dtype(partition_col.dtype):
+            obj, suggested_method = (
+                ("column", f"`.dropna(subset=['{partition_col.name}'])`")
+                if any(partition_col._name == df[c]._name for c in df)
+                else ("series", "`.loc[series[~series.isna()]]`")
+            )
+            raise NotImplementedError(
+                f"Divisions calculation failed for non-numeric {obj} '{partition_col.name}'.\n"
+                f"This is probably due to the presence of nulls, which Dask does not entirely support in the index.\n"
+                f"We suggest you try with {suggested_method}."
+            ) from e
+        # For numeric types there shouldn't be problems with nulls, so we raise as-it-is this particular TypeError
+        else:
+            raise e
+
+    empty_dataframe_detected = pd.isna(divisions).all()
     if repartition or empty_dataframe_detected:
         total = sum(sizes)
         npartitions = max(math.ceil(total / partition_size), 1)
         npartitions = min(npartitions, df.npartitions)
-        n = len(divisions)
+        n = divisions.size
         try:
             divisions = np.interp(
                 x=np.linspace(0, n - 1, npartitions + 1),
                 xp=np.linspace(0, n - 1, n),
-                fp=divisions,
+                fp=divisions.tolist(),
             ).tolist()
         except (TypeError, ValueError):  # str type
             indexes = np.linspace(0, n - 1, npartitions + 1).astype(int)
-            divisions = [divisions[i] for i in indexes]
+            divisions = divisions.iloc[indexes].tolist()
     else:
         # Drop duplicate divisions returned by partition quantiles
-        divisions = list(toolz.unique(divisions[:-1])) + [divisions[-1]]
+        n = divisions.size
+        divisions = (
+            list(divisions.iloc[: n - 1].unique()) + divisions.iloc[n - 1 :].tolist()
+        )
 
-    mins = remove_nans(mins)
-    maxes = remove_nans(maxes)
-    if pd.api.types.is_categorical_dtype(partition_col.dtype):
+    mins = mins.fillna(method="bfill")
+    maxes = maxes.fillna(method="bfill")
+    if isinstance(partition_col.dtype, pd.CategoricalDtype):
         dtype = partition_col.dtype
-        mins = pd.Categorical(mins, dtype=dtype).codes.tolist()
-        maxes = pd.Categorical(maxes, dtype=dtype).codes.tolist()
+        mins = mins.astype(dtype)
+        maxes = maxes.astype(dtype)
 
-    return divisions, mins, maxes
+    if mins.isna().any() or maxes.isna().any():
+        presorted = False
+    else:
+        n = mins.size
+        maxes2 = (maxes.iloc[: n - 1] if ascending else maxes.iloc[1:]).reset_index(
+            drop=True
+        )
+        mins2 = (mins.iloc[1:] if ascending else mins.iloc[: n - 1]).reset_index(
+            drop=True
+        )
+        presorted = (
+            mins.tolist() == mins.sort_values(ascending=ascending).tolist()
+            and maxes.tolist() == maxes.sort_values(ascending=ascending).tolist()
+            and (maxes2 < mins2).all()
+        )
+
+    return divisions, mins.tolist(), maxes.tolist(), presorted
 
 
 def sort_values(
-    df,
-    by,
-    npartitions=None,
-    ascending=True,
-    na_position="last",
-    upsample=1.0,
-    partition_size=128e6,
-    sort_function=None,
-    sort_function_kwargs=None,
+    df: DataFrame,
+    by: Union[str, List[str]],
+    npartitions: Optional[Union[int, Literal["auto"]]] = None,
+    ascending: Union[bool, List[bool]] = True,
+    na_position: Union[Literal["first"], Literal["last"]] = "last",
+    upsample: float = 1.0,
+    partition_size: float = 128e6,
+    sort_function: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+    sort_function_kwargs: Optional[Mapping[str, Any]] = None,
     **kwargs,
-):
+) -> DataFrame:
     """See DataFrame.sort_values for docstring"""
     if na_position not in ("first", "last"):
         raise ValueError("na_position must be either 'first' or 'last'")
     if not isinstance(by, list):
         by = [by]
-    if len(by) > 1 and df.npartitions > 1 or any(not isinstance(b, str) for b in by):
+    if any(not isinstance(b, str) for b in by):
         raise NotImplementedError(
             "Dataframes only support sorting by named columns which must be passed as a "
-            "string or a list of strings; multi-partition dataframes only support sorting "
-            "by a single column.\n"
+            "string or a list of strings.\n"
             "You passed %s" % str(by)
         )
 
@@ -123,15 +161,6 @@ def sort_values(
 
     sort_by_col = df[by[0]]
 
-    divisions, mins, maxes = _calculate_divisions(
-        df, sort_by_col, repartition, npartitions, upsample, partition_size
-    )
-
-    if len(divisions) == 2:
-        return df.repartition(npartitions=1).map_partitions(
-            sort_function, **sort_kwargs
-        )
-
     if not isinstance(ascending, bool):
         # support [True] as input
         if (
@@ -145,25 +174,22 @@ def sort_values(
                 f"Dask currently only supports a single boolean for ascending. You passed {str(ascending)}"
             )
 
-    if (
-        all(not pd.isna(x) for x in divisions)
-        and mins == sorted(mins, reverse=not ascending)
-        and maxes == sorted(maxes, reverse=not ascending)
-        and all(
-            mx < mn
-            for mx, mn in zip(
-                maxes[:-1] if ascending else maxes[1:],
-                mins[1:] if ascending else mins[:-1],
-            )
+    divisions, mins, maxes, presorted = _calculate_divisions(
+        df, sort_by_col, repartition, npartitions, upsample, partition_size, ascending
+    )
+
+    if len(divisions) == 2:
+        return df.repartition(npartitions=1).map_partitions(
+            sort_function, **sort_kwargs
         )
-        and npartitions == df.npartitions
-    ):
+
+    if presorted and npartitions == df.npartitions:
         # divisions are in the right place
         return df.map_partitions(sort_function, **sort_kwargs)
 
     df = rearrange_by_divisions(
         df,
-        by,
+        by[0],
         divisions,
         ascending=ascending,
         na_position=na_position,
@@ -174,35 +200,18 @@ def sort_values(
 
 
 def set_index(
-    df,
-    index,
-    npartitions=None,
-    shuffle=None,
-    compute=False,
-    drop=True,
-    upsample=1.0,
-    divisions=None,
-    partition_size=128e6,
+    df: DataFrame,
+    index: Union[str, Series],
+    npartitions: Optional[Union[int, Literal["auto"]]] = None,
+    shuffle: Optional[str] = None,
+    compute: bool = False,
+    drop: bool = True,
+    upsample: float = 1.0,
+    divisions: Optional[Sequence] = None,
+    partition_size: float = 128e6,
     **kwargs,
-):
+) -> DataFrame:
     """See _Frame.set_index for docstring"""
-    if isinstance(index, Series) and index._name == df.index._name:
-        return df
-    if isinstance(index, (DataFrame, tuple, list)):
-        # Accept ["a"], but not [["a"]]
-        if (
-            isinstance(index, list)
-            and len(index) == 1
-            and not isinstance(index[0], list)  # if index = [["a"]], leave it that way
-        ):
-            index = index[0]
-        else:
-            raise NotImplementedError(
-                "Dask dataframe does not yet support multi-indexes.\n"
-                "You tried to index with this index: %s\n"
-                "Indexes must be single columns only." % str(index)
-            )
-
     if npartitions == "auto":
         repartition = True
         npartitions = max(100, df.npartitions)
@@ -217,16 +226,11 @@ def set_index(
         index2 = index
 
     if divisions is None:
-        divisions, mins, maxes = _calculate_divisions(
+        divisions, mins, maxes, presorted = _calculate_divisions(
             df, index2, repartition, npartitions, upsample, partition_size
         )
 
-        if (
-            mins == sorted(mins)
-            and maxes == sorted(maxes)
-            and all(mx < mn for mx, mn in zip(maxes[:-1], mins[1:]))
-            and npartitions == df.npartitions
-        ):
+        if presorted and npartitions == df.npartitions:
             divisions = mins + [maxes[-1]]
             result = set_sorted_index(df, index, drop=drop, divisions=divisions)
             return result.map_partitions(M.sort_index)
@@ -236,38 +240,15 @@ def set_index(
     )
 
 
-def remove_nans(divisions):
-    """Remove nans from divisions
-
-    These sometime pop up when we call min/max on an empty partition
-
-    Examples
-    --------
-    >>> remove_nans((np.nan, 1, 2))
-    [1, 1, 2]
-    >>> remove_nans((1, np.nan, 2))
-    [1, 2, 2]
-    >>> remove_nans((1, 2, np.nan))
-    [1, 2, 2]
-    """
-    divisions = list(divisions)
-
-    for i in range(len(divisions) - 2, -1, -1):
-        if pd.isnull(divisions[i]):
-            divisions[i] = divisions[i + 1]
-
-    for i in range(len(divisions) - 1, -1, -1):
-        if not pd.isnull(divisions[i]):
-            for j in range(i + 1, len(divisions)):
-                divisions[j] = divisions[i]
-            break
-
-    return divisions
-
-
 def set_partition(
-    df, index, divisions, max_branch=32, drop=True, shuffle=None, compute=None
-):
+    df: DataFrame,
+    index: Union[str, Series],
+    divisions: Sequence,
+    max_branch: int = 32,
+    drop: bool = True,
+    shuffle: Optional[str] = None,
+    compute: Optional[bool] = None,
+) -> DataFrame:
     """Group DataFrame by index
 
     Sets a new index and partitions data along that index according to
@@ -304,7 +285,7 @@ def set_partition(
         # pd.isna considers tuples to be scalars. Convert to a list.
         divisions = list(divisions)
 
-    if np.isscalar(index):
+    if not isinstance(index, Series):
         dtype = df[index].dtype
     else:
         dtype = index.dtype
@@ -313,7 +294,7 @@ def set_partition(
         # Can't construct a Series[int64] when any / all of the divisions are NaN.
         divisions = df._meta._constructor_sliced(divisions)
     elif (
-        pd.api.types.is_categorical_dtype(dtype)
+        isinstance(dtype, pd.CategoricalDtype)
         and UNKNOWN_CATEGORIES in dtype.categories
     ):
         # If categories are unknown, leave as a string dtype instead.
@@ -321,7 +302,7 @@ def set_partition(
     else:
         divisions = df._meta._constructor_sliced(divisions, dtype=dtype)
 
-    if np.isscalar(index):
+    if not isinstance(index, Series):
         partitions = df[index].map_partitions(
             set_partitions_pre, divisions=divisions, meta=meta
         )
@@ -342,7 +323,7 @@ def set_partition(
         ignore_index=True,
     )
 
-    if np.isscalar(index):
+    if not isinstance(index, Series):
         df4 = df3.map_partitions(
             set_index_post_scalar,
             index_name=index,
@@ -357,7 +338,9 @@ def set_partition(
             column_dtype=df.columns.dtype,
         )
 
-    df4.divisions = tuple(methods.tolist(divisions))
+    divisions = methods.tolist(divisions)
+    # None and pd.NA values are not sortable
+    df4.divisions = tuple(i if not pd.isna(i) else np.nan for i in divisions)
 
     return df4.map_partitions(M.sort_index)
 
@@ -388,6 +371,7 @@ def shuffle(
     shuffle_disk
     """
     list_like = pd.api.types.is_list_like(index) and not is_dask_collection(index)
+    shuffle = shuffle or get_default_shuffle_algorithm()
     if shuffle == "tasks" and (isinstance(index, str) or list_like):
         # Avoid creating the "_partitions" column if possible.
         # We currently do this if the user is passing in
@@ -487,7 +471,7 @@ def rearrange_by_column(
     compute=None,
     ignore_index=False,
 ):
-    shuffle = shuffle or config.get("shuffle", None) or "disk"
+    shuffle = shuffle or get_default_shuffle_algorithm()
 
     # if the requested output partitions < input partitions
     # we repartition first as shuffling overhead is
@@ -521,7 +505,7 @@ class maybe_buffered_partd:
     def __init__(self, buffer=True, tempdir=None):
         self.tempdir = tempdir or config.get("temporary_directory", None)
         self.buffer = buffer
-        self.compression = config.get("dataframe.shuffle-compression", None)
+        self.compression = config.get("dataframe.shuffle.compression", None)
 
     def __reduce__(self):
         if self.tempdir:
@@ -813,7 +797,7 @@ def cleanup_partd_files(p, keys):
     if isinstance(p, partd.Encode):
         maybe_file = p.partd
     else:
-        maybe_file
+        maybe_file = None
 
     if isinstance(maybe_file, partd.File):
         path = maybe_file.path
@@ -837,15 +821,20 @@ def set_partitions_pre(s, divisions, ascending=True, na_position="last"):
             partitions = divisions.searchsorted(s, side="right") - 1
         else:
             partitions = len(divisions) - divisions.searchsorted(s, side="right") - 1
-    except TypeError:
-        # `searchsorted` fails if `s` contains nulls and strings
+    except (TypeError, ValueError):
+        # `searchsorted` fails if either `divisions` or `s` contains nulls and strings
         partitions = np.empty(len(s), dtype="int32")
         not_null = s.notna()
+        divisions_notna = divisions[divisions.notna()]
         if ascending:
-            partitions[not_null] = divisions.searchsorted(s[not_null], side="right") - 1
+            partitions[not_null] = (
+                divisions_notna.searchsorted(s[not_null], side="right") - 1
+            )
         else:
             partitions[not_null] = (
-                len(divisions) - divisions.searchsorted(s[not_null], side="right") - 1
+                len(divisions)
+                - divisions_notna.searchsorted(s[not_null], side="right")
+                - 1
             )
     partitions[(partitions < 0) | (partitions >= len(divisions) - 1)] = (
         len(divisions) - 2 if ascending else 0
@@ -869,7 +858,7 @@ def shuffle_group_2(df, cols, ignore_index, nparts):
         ).astype(np.int32)
 
     n = ind.max() + 1
-    result2 = group_split_dispatch(df, ind.values.view(), n, ignore_index=ignore_index)
+    result2 = group_split_dispatch(df, ind, n, ignore_index=ignore_index)
     return result2, df.iloc[:0]
 
 
@@ -920,14 +909,11 @@ def shuffle_group(df, cols, stage, k, npartitions, ignore_index, nfinal):
         if nfinal and nfinal != npartitions:
             ind = ind % int(nfinal)
 
-    c = ind.values
     typ = np.min_scalar_type(npartitions * 2)
-
-    c = np.mod(c, npartitions).astype(typ, copy=False)
-    np.floor_divide(c, k**stage, out=c)
-    np.mod(c, k, out=c)
-
-    return group_split_dispatch(df, c, k, ignore_index=ignore_index)
+    # Here we convert the final output index `ind` into the output index
+    # for the current stage.
+    ind = (ind % npartitions).astype(typ, copy=False) // k**stage % k
+    return group_split_dispatch(df, ind, k, ignore_index=ignore_index)
 
 
 @contextlib.contextmanager
@@ -987,7 +973,14 @@ def fix_overlap(ddf, mins, maxes, lens):
     """
     name = "fix-overlap-" + tokenize(ddf, mins, maxes, lens)
 
-    non_empties = [i for i, l in enumerate(lens) if l != 0]
+    non_empties = [i for i, length in enumerate(lens) if length != 0]
+    # If all empty, collapse into one partition
+    if len(non_empties) == 0:
+        divisions = (None, None)
+        dsk = {(name, 0): (ddf._name, 0)}
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[ddf])
+        return new_dd_object(graph, name, ddf._meta, divisions)
+
     # drop empty partitions by mapping each partition in a new graph to a particular
     # partition on the old graph.
     dsk = {(name, i): (ddf._name, div) for i, div in enumerate(non_empties)}
@@ -1011,16 +1004,20 @@ def fix_overlap(ddf, mins, maxes, lens):
         # this partition (i) if the data from this partition will need to be moved
         # to the next partition (i+1) anyway.  If we concatenate data too early,
         # we may lose rows (https://github.com/dask/dask/issues/6972).
-        if i == len(mins) - 2 or divisions[i] != divisions[i + 1]:
-            frames.append(ddf_keys[i])
-            dsk[(name, i)] = (methods.concat, frames)
-            frames = []
+        if divisions[i] == divisions[i + 1] and i + 1 in overlap:
+            continue
+
+        frames.append(ddf_keys[i])
+        dsk[(name, i)] = (methods.concat, frames)
+        frames = []
 
     graph = HighLevelGraph.from_collections(name, dsk, dependencies=[ddf])
     return new_dd_object(graph, name, ddf._meta, divisions)
 
 
-def _compute_partition_stats(column, allow_overlap=False, **kwargs) -> tuple:
+def _compute_partition_stats(
+    column: Series, allow_overlap: bool = False, **kwargs
+) -> Tuple[List, List, List[int]]:
     """For a given column, compute the min, max, and len of each partition.
 
     And make sure that the partitions are sorted relative to each other.
@@ -1030,10 +1027,10 @@ def _compute_partition_stats(column, allow_overlap=False, **kwargs) -> tuple:
     maxes = column.map_partitions(M.max, meta=column)
     lens = column.map_partitions(len, meta=column)
     mins, maxes, lens = compute(mins, maxes, lens, **kwargs)
-    mins = remove_nans(mins)
-    maxes = remove_nans(maxes)
-    non_empty_mins = [m for m, l in zip(mins, lens) if l != 0]
-    non_empty_maxes = [m for m, l in zip(maxes, lens) if l != 0]
+    mins = mins.fillna(method="bfill").tolist()
+    maxes = maxes.fillna(method="bfill").tolist()
+    non_empty_mins = [m for m, length in zip(mins, lens) if length != 0]
+    non_empty_maxes = [m for m, length in zip(maxes, lens) if length != 0]
     if (
         sorted(non_empty_mins) != non_empty_mins
         or sorted(non_empty_maxes) != non_empty_maxes
@@ -1053,20 +1050,21 @@ def _compute_partition_stats(column, allow_overlap=False, **kwargs) -> tuple:
             f"for each partition are : {list(zip(mins, maxes, lens))}",
             UserWarning,
         )
+    lens = methods.tolist(lens)
     if not allow_overlap:
         return (mins, maxes, lens)
     else:
         return (non_empty_mins, non_empty_maxes, lens)
 
 
-def compute_divisions(df, col=None, **kwargs) -> tuple:
+def compute_divisions(df: DataFrame, col: Optional[Any] = None, **kwargs) -> Tuple:
     column = df.index if col is None else df[col]
     mins, maxes, _ = _compute_partition_stats(column, allow_overlap=False, **kwargs)
 
     return tuple(mins) + (maxes[-1],)
 
 
-def compute_and_set_divisions(df, **kwargs):
+def compute_and_set_divisions(df: DataFrame, **kwargs) -> DataFrame:
     mins, maxes, lens = _compute_partition_stats(df.index, allow_overlap=True, **kwargs)
     if len(mins) == len(df.divisions) - 1:
         df._divisions = tuple(mins) + (maxes[-1],)
@@ -1076,8 +1074,14 @@ def compute_and_set_divisions(df, **kwargs):
     return fix_overlap(df, mins, maxes, lens)
 
 
-def set_sorted_index(df, index, drop=True, divisions=None, **kwargs):
-    if isinstance(index, _Frame):
+def set_sorted_index(
+    df: DataFrame,
+    index: Union[str, Series],
+    drop: bool = True,
+    divisions: Optional[Sequence] = None,
+    **kwargs,
+) -> DataFrame:
+    if isinstance(index, Series):
         meta = df._meta.set_index(index._meta, drop=drop)
     else:
         meta = df._meta.set_index(index, drop=drop)

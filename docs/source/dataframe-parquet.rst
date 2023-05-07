@@ -1,3 +1,5 @@
+.. _dataframe.parquet:
+
 Dask Dataframe and Parquet
 ==========================
 
@@ -63,16 +65,15 @@ Engine
 ~~~~~~
 
 :func:`read_parquet` supports two backend engines - ``pyarrow`` and
-``fastparquet``.  For historical reasons this defaults to ``fastparquet`` if it
-is installed, and falls back to ``pyarrow`` otherwise. We recommend using
-``pyarrow`` when possible. This can be explicitly set by passing
-``engine="pyarrow"``.
+``fastparquet``. The ``pyarrow`` engine is used by default, falling back to
+``fastparquet`` if ``pyarrow`` isn't installed. If desired, you may explicitly
+specify the engine using the ``engine`` keyword argument:
 
 .. code-block:: python
 
    >>> df = dd.read_parquet(
    ...      "s3://bucket-name/my/parquet/",
-   ...      engine="pyarrow"  # explicitly specify the pyarrow engine
+   ...      engine="fastparquet"  # explicitly specify the fastparquet engine
    ... )
 
 Metadata
@@ -106,17 +107,27 @@ disable loading the ``_metadata`` file by specifying
 Partition Size
 ~~~~~~~~~~~~~~
 
-By default, Dask will load each parquet file individually as a partition in
-the Dask dataframe. This is performant provided all files are of reasonable size.
+By default, Dask will use metadata from the first parquet file in the dataset
+to infer whether or not it is safe load each file individually as a partition
+in the Dask dataframe. If the uncompressed byte size of the parquet data
+exceeds ``blocksize`` (which is 128 MiB by default), then each partition will
+correspond to a range of parquet row-groups instead of the entire file.
+
+For best performance, use files that can be individually mapped to good
+dataframe partition sizes, and set ``blocksize`` accordingly. If individual
+files need to be divided into multiple row-group ranges, and the dataset
+does not contain a ``_metadata`` file, Dask will need to load all footer
+metadata up-front.
 
 We recommend aiming for 10-250 MiB in-memory size per file once loaded into
-pandas. Too large files can lead to excessive memory usage on a single worker,
-while too small files can lead to poor performance as the overhead of Dask
-dominates. If you need to read a parquet dataset composed of large files,
-you can pass ``split_row_groups=True`` to have Dask partition your data by
-*row group* instead of by *file*. Note that this approach will not scale as
-well as ``split_row_groups=False`` without a global ``_metadata`` file,
-because the footer will need to be loaded from every file in the dataset.
+pandas. Oversized partitions can lead to excessive memory usage on a single
+worker, while undersized partitions can lead to poor performance as the
+overhead of Dask dominates.
+
+If you know your parquet dataset comprises oversized files, you can pass
+``split_row_groups='adaptive'`` to ensure that Dask will attempt to keep
+each partition under the ``blocksize`` limit. Note that partitions may
+still exceed ``blocksize`` if one or more row-groups are too large.
 
 Column Selection
 ~~~~~~~~~~~~~~~~
@@ -163,7 +174,7 @@ calculating divisions should be avoided for large datasets without a
 global ``_metadata`` file. This is especially true for remote storage.
 
 For more information about divisions, see :ref:`dataframe.design`.
- 
+
 Writing
 -------
 
@@ -217,16 +228,15 @@ Engine
 ~~~~~~
 
 :func:`to_parquet` supports two backend engines - ``pyarrow`` and
-``fastparquet``.  For historical reasons this defaults to ``fastparquet`` if it
-is installed, and falls back to ``pyarrow`` otherwise. We recommend using
-``pyarrow`` when possible. This can be explicitly set by passing
-``engine="pyarrow"``.
+``fastparquet``. The ``pyarrow`` engine is used by default, falling back to
+``fastparquet`` if ``pyarrow`` isn't installed. If desired, you may explicitly
+specify the engine using the ``engine`` keyword argument:
 
 .. code-block:: python
 
    >>> df.to_parquet(
-   ...     "s3://bucket-name/my/parquet/",
-   ...     engine="pyarrow"  # explicitly specify the pyarrow engine
+   ...      "s3://bucket-name/my/parquet/",
+   ...      engine="fastparquet"  # explicitly specify the fastparquet engine
    ... )
 
 Metadata

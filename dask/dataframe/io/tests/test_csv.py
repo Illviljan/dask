@@ -1,7 +1,7 @@
 import gzip
 import os
 import warnings
-from io import BytesIO
+from io import BytesIO, StringIO
 from unittest import mock
 
 import pytest
@@ -17,7 +17,7 @@ from dask.base import compute_as_if_collection
 from dask.bytes.core import read_bytes
 from dask.bytes.utils import compress
 from dask.core import flatten
-from dask.dataframe._compat import tm
+from dask.dataframe._compat import PANDAS_GT_200, tm
 from dask.dataframe.io.csv import (
     _infer_block_size,
     auto_blocksize,
@@ -26,7 +26,12 @@ from dask.dataframe.io.csv import (
     text_blocks_to_pandas,
 )
 from dask.dataframe.optimize import optimize_dataframe_getitem
-from dask.dataframe.utils import assert_eq, has_known_categories
+from dask.dataframe.utils import (
+    assert_eq,
+    get_string_dtype,
+    has_known_categories,
+    pyarrow_strings_enabled,
+)
 from dask.layers import DataFrameIOLayer
 from dask.utils import filetext, filetexts, tmpdir, tmpfile
 from dask.utils_test import hlg_layer
@@ -120,7 +125,18 @@ fwf_files = {
     ),
 }
 
-expected = pd.concat([pd.read_csv(BytesIO(csv_files[k])) for k in sorted(csv_files)])
+
+def read_files(file_names=csv_files):
+    df = pd.concat([pd.read_csv(BytesIO(csv_files[k])) for k in sorted(file_names)])
+    df = df.astype({"name": get_string_dtype(), "amount": int, "id": int})
+    return df
+
+
+def read_files_with(file_names, handler, **kwargs):
+    df = pd.concat([handler(n, **kwargs) for n in sorted(file_names)])
+    df = df.astype({"name": get_string_dtype(), "amount": int, "id": int})
+    return df
+
 
 comment_header = b"""# some header lines
 # that may be present
@@ -193,7 +209,7 @@ def test_text_blocks_to_pandas_simple(reader, files):
     values = text_blocks_to_pandas(reader, blocks, header, head, kwargs)
     assert isinstance(values, dd.DataFrame)
     assert hasattr(values, "dask")
-    assert len(values.dask) == 3
+    assert len(values.dask) == 6 if pyarrow_strings_enabled() else 3
 
     assert_eq(df.amount.sum(), 100 + 200 + 300 + 400 + 500 + 600)
 
@@ -214,6 +230,7 @@ def test_text_blocks_to_pandas_kwargs(reader, files):
 
 @csv_and_table
 def test_text_blocks_to_pandas_blocked(reader, files):
+    expected = read_files()
     header = files["2014-01-01.csv"].split(b"\n")[0] + b"\n"
     blocks = []
     for k in sorted(files):
@@ -248,7 +265,7 @@ def test_skiprows(dd_read, pd_read, files):
     skip = len(comment_header.splitlines())
     with filetexts(files, mode="b"):
         df = dd_read("2014-01-*.csv", skiprows=skip)
-        expected_df = pd.concat([pd_read(n, skiprows=skip) for n in sorted(files)])
+        expected_df = read_files_with(files, pd_read, skiprows=skip)
         assert_eq(df, expected_df, check_dtype=False)
 
 
@@ -260,12 +277,12 @@ def test_comment(dd_read, pd_read, files):
     files = {
         name: comment_header
         + b"\n"
-        + content.replace(b"\n", b"  # just some comment\n", 1)
+        + content.replace(b"\n", b"# just some comment\n", 1)
         for name, content in files.items()
     }
     with filetexts(files, mode="b"):
         df = dd_read("2014-01-*.csv", comment="#")
-        expected_df = pd.concat([pd_read(n, comment="#") for n in sorted(files)])
+        expected_df = read_files_with(files, pd_read, comment="#")
         assert_eq(df, expected_df, check_dtype=False)
 
 
@@ -278,9 +295,7 @@ def test_skipfooter(dd_read, pd_read, files):
     skip = len(comment_footer.splitlines())
     with filetexts(files, mode="b"):
         df = dd_read("2014-01-*.csv", skipfooter=skip, engine="python")
-        expected_df = pd.concat(
-            [pd_read(n, skipfooter=skip, engine="python") for n in sorted(files)]
-        )
+        expected_df = read_files_with(files, pd_read, skipfooter=skip, engine="python")
         assert_eq(df, expected_df, check_dtype=False)
 
 
@@ -299,7 +314,7 @@ def test_skiprows_as_list(dd_read, pd_read, files, units):
     skip = [0, 1, 2, 3, 5]
     with filetexts(files, mode="b"):
         df = dd_read("2014-01-*.csv", skiprows=skip)
-        expected_df = pd.concat([pd_read(n, skiprows=skip) for n in sorted(files)])
+        expected_df = read_files_with(files, pd_read, skiprows=skip)
         assert_eq(df, expected_df, check_dtype=False)
 
 
@@ -360,6 +375,19 @@ def test_read_csv(dd_read, pd_read, text, sep):
         assert_eq(result, pd_read(fn, sep=sep))
 
 
+@pytest.mark.skipif(
+    not PANDAS_GT_200, reason="dataframe.convert-string requires pandas>=2.0"
+)
+def test_read_csv_convert_string_config():
+    pytest.importorskip("pyarrow", reason="Requires pyarrow strings")
+    with filetext(csv_text) as fn:
+        df = pd.read_csv(fn)
+        with dask.config.set({"dataframe.convert-string": True}):
+            ddf = dd.read_csv(fn)
+        df_pyarrow = df.astype({"name": "string[pyarrow]"})
+        assert_eq(df_pyarrow, ddf, check_index=False)
+
+
 @pytest.mark.parametrize(
     "dd_read,pd_read,text,skip",
     [
@@ -399,6 +427,7 @@ def test_read_csv_skiprows_only_in_first_partition(dd_read, pd_read, text, skip)
     [(dd.read_csv, pd.read_csv, csv_files), (dd.read_table, pd.read_table, tsv_files)],
 )
 def test_read_csv_files(dd_read, pd_read, files):
+    expected = read_files()
     with filetexts(files, mode="b"):
         df = dd_read("2014-01-*.csv")
         assert_eq(df, expected, check_dtype=False)
@@ -416,7 +445,7 @@ def test_read_csv_files(dd_read, pd_read, files):
 def test_read_csv_files_list(dd_read, pd_read, files):
     with filetexts(files, mode="b"):
         subset = sorted(files)[:2]  # Just first 2
-        sol = pd.concat([pd_read(BytesIO(files[k])) for k in subset])
+        sol = read_files(subset)
         res = dd_read(subset)
         assert_eq(res, sol, check_dtype=False)
 
@@ -603,11 +632,11 @@ def test_consistent_dtypes_2():
     Frank,600
     """
     )
-
+    string_dtype = get_string_dtype()
     with filetexts({"foo.1.csv": text1, "foo.2.csv": text2}):
         df = dd.read_csv("foo.*.csv", blocksize=25)
-        assert df.name.dtype == object
-        assert df.name.compute().dtype == object
+        assert df.name.dtype == string_dtype
+        assert df.name.compute().dtype == string_dtype
 
 
 def test_categorical_dtypes():
@@ -746,6 +775,8 @@ def test_read_csv_sensitive_to_enforce():
 def test_read_csv_compression(fmt, blocksize):
     if fmt and fmt not in compress:
         pytest.skip("compress function not provided for %s" % fmt)
+
+    expected = read_files()
     suffix = {"gzip": ".gz", "bz2": ".bz2", "zip": ".zip", "xz": ".xz"}.get(fmt, "")
     files2 = valmap(compress[fmt], csv_files) if fmt else csv_files
     renamed_files = {k + suffix: v for k, v in files2.items()}
@@ -768,7 +799,6 @@ def test_read_csv_compression(fmt, blocksize):
 def test_warn_non_seekable_files():
     files2 = valmap(compress["gzip"], csv_files)
     with filetexts(files2, mode="b"):
-
         with pytest.warns(UserWarning) as w:
             df = dd.read_csv("2014-01-*.csv", compression="gzip")
             assert df.npartitions == 3
@@ -923,7 +953,7 @@ def test_csv_with_integer_names():
 
 def test_late_dtypes():
     text = "numbers,names,more_numbers,integers,dates\n"
-    for i in range(1000):
+    for _ in range(1000):
         text += "1,,2,3,2017-10-31 00:00:00\n"
     text += "1.5,bar,2.5,3,4998-01-01 00:00:00\n"
 
@@ -1041,7 +1071,7 @@ def test_late_dtypes():
 
 def test_assume_missing():
     text = "numbers,names,more_numbers,integers\n"
-    for i in range(1000):
+    for _ in range(1000):
         text += "1,foo,2,3\n"
     text += "1.5,bar,2.5,3\n"
     with filetext(text) as fn:
@@ -1062,7 +1092,7 @@ def test_assume_missing():
         assert_eq(res, sol.astype({"integers": float}))
 
     text = "numbers,integers\n"
-    for i in range(1000):
+    for _ in range(1000):
         text += "1,2\n"
     text += "1.5,2\n"
 
@@ -1711,6 +1741,7 @@ def test_csv_getitem_column_order(tmpdir):
     assert_eq(df1[columns], df2)
 
 
+@pytest.mark.skip_with_pyarrow_strings  # checks graph layers
 def test_getitem_optimization_after_filter():
     with filetext(timeseries) as fn:
         expect = pd.read_csv(fn)
@@ -1770,3 +1801,58 @@ def test_csv_name_should_be_different_even_if_head_is_same(tmpdir):
     )
 
     assert new_df.dask.keys() != old_df.dask.keys()
+
+
+def test_select_with_include_path_column(tmpdir):
+    # https://github.com/dask/dask/issues/9518
+
+    d = {"col1": [i for i in range(0, 100)], "col2": [i for i in range(100, 200)]}
+    df = pd.DataFrame(data=d)
+
+    temp_path = str(tmpdir) + "/"
+    for i in range(6):
+        df.to_csv(f"{temp_path}file_{i}.csv", index=False)
+
+    ddf = dd.read_csv(temp_path + "*.csv", include_path_column=True)
+
+    assert_eq(ddf.col1, pd.concat([df.col1] * 6))
+
+
+@pytest.mark.parametrize("use_names", [True, False])
+def test_names_with_header_0(tmpdir, use_names):
+    # This test sets `blocksize` so that we will
+    # get two partitions in `dd.read_csv`. We are
+    # testing that `header=0` results in the expected
+    # behavior when `names` is also specified.
+    # See: https://github.com/dask/dask/issues/9610
+
+    csv = StringIO(
+        """\
+    city1,1992-09-13,10
+    city2,1992-09-13,14
+    city3,1992-09-13,98
+    city4,1992-09-13,13
+    city5,1992-09-13,45
+    city6,1992-09-13,64
+    """
+    )
+
+    if use_names:
+        names = ["city", "date", "sales"]
+        usecols = ["city", "sales"]
+    else:
+        names = usecols = None
+
+    path = os.path.join(str(tmpdir), "input.csv")
+    pd.read_csv(csv, header=None).to_csv(path, index=False, header=False)
+    df = pd.read_csv(path, header=0, names=names, usecols=usecols)
+    ddf = dd.read_csv(
+        path,
+        header=0,
+        names=names,
+        usecols=usecols,
+        blocksize=60,
+    )
+
+    # Result should only leave out 0th row
+    assert_eq(df, ddf, check_index=False)
