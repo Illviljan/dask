@@ -7,6 +7,7 @@ from functools import partial
 import pytest
 
 import dask
+from dask._task_spec import Alias, Task, TaskRef, convert_legacy_graph
 from dask.base import tokenize
 from dask.core import get_dependencies
 from dask.local import get_sync
@@ -225,6 +226,48 @@ def test_fuse_keys():
             "x": "y-x",
         }
     )
+
+
+def test_donot_substitute_same_key_multiple_times():
+    already_called = False
+
+    def inc_only_once(x):
+        nonlocal already_called
+        if already_called:
+            raise RuntimeError
+        already_called = True
+        return x + 1
+
+    # This is the graph topology of a Z.T @ Z after blockwise fusion as given in
+    # https://github.com/dask/dask/issues/10645
+    dsk = {
+        # Note that there is some logic in there that actually checks the type
+        # of this and an integer is inlined while an array is not. However, data
+        # keys are also flagged as forbidden to be fused so this should not be a
+        # problem
+        "A": 42,  # Array
+        "B": (inc_only_once, "A"),  # Add
+        "C": (add, "B", "B"),  # matmul
+        "D": (inc, "C"),  # getitem
+    }
+
+    # fuse accepts dependencies to avoid having to recompute it. However,
+    # internally it actually requires it to be in the format of dict[Key,
+    # list[Key]] which is rarely used elsewhere since most applications are
+    # using lists.
+    # It uses these lists to infer duplicates in dependencies and avoids fusing
+    # those since substituting the same key multiple times also causes them to
+    # be computed multiple times. A better logic would replace those with a
+    # SubGraphCallable
+    dependencies = {"A": set(), "B": {"A"}, "C": {"B"}, "D": {"C"}}
+    fused_dsk = fuse(
+        dsk,
+        keys=["A", "D"],
+        dependencies=dependencies,
+    )[0]
+    from dask.core import get
+
+    assert get(fused_dsk, "D") > 1
 
 
 def test_inline():
@@ -1186,26 +1229,53 @@ def test_SubgraphCallable_eq():
     dsk2 = {"a": (inc, 0), "b": (inc, "a"), "c": (add, "d", "e")}
     f1 = SubgraphCallable(dsk1, "c", ["d", "e"])
     f2 = SubgraphCallable(dsk2, "c", ["d", "e"])
+
     # Different graphs must compare unequal (when no name given)
     assert f1 != f2
+    assert hash(f1) != hash(f2)
+    assert tokenize(f1) != tokenize(f2)
+
+    # Identical graphs must compare as equal and generate the same name
+    dsk1b = {"a": 1, "b": 2, "c": (add, "d", "e")}
+    f1b = SubgraphCallable(dsk1b, "c", ["d", "e"])
+    assert f1b.name == f1.name
+    assert f1 == f1b
+    assert hash(f1) == hash(f1b)
+    assert tokenize(f1) == tokenize(f1b)
 
     # Different inputs must compare unequal
     f3 = SubgraphCallable(dsk2, "c", ["d", "f"], name=f1.name)
     assert f3 != f1
+    assert hash(f3) != hash(f1)
+    assert tokenize(f3) != tokenize(f1)
 
     # Different outputs must compare unequal
     f4 = SubgraphCallable(dsk2, "a", ["d", "e"], name=f1.name)
     assert f4 != f1
+    assert hash(f4) != hash(f1)
+    assert tokenize(f4) != tokenize(f1)
 
-    # Reordering the inputs must not prevent equality
+    # Reordering the inputs must not prevent equality...
     f5 = SubgraphCallable(dsk1, "c", ["e", "d"], name=f1.name)
     assert f1 == f5
     assert hash(f1) == hash(f5)
+    # ... except for tokenize, which takes into consideration the whole dsk
+    assert tokenize(f1) != tokenize(f5)
 
     # Explicitly named graphs with different names must be unequal
-    unnamed1 = SubgraphCallable(dsk1, "c", ["d", "e"], name="first")
-    unnamed2 = SubgraphCallable(dsk1, "c", ["d", "e"], name="second")
-    assert unnamed1 != unnamed2
+    f6 = SubgraphCallable(dsk1, "c", ["d", "e"], name="first")
+    f7 = SubgraphCallable(dsk1, "c", ["d", "e"], name="second")
+    assert f6 != f7
+    assert hash(f6) != hash(f7)
+    assert tokenize(f6) != tokenize(f7)
+
+    # Equality and hashing don't rely on tokenizing the full dsk,
+    # because tokenization is not guaranteed to be deterministic
+    f8 = SubgraphCallable({"a": object(), "b": "a"}, "b", [], name="n")
+    f9 = SubgraphCallable({"a": object(), "b": "a"}, "b", [], name="n")
+    assert f8 == f9
+    assert hash(f8) == hash(f9)
+    assert tokenize(f8) != tokenize(f9)
 
 
 def test_fuse_subgraphs(compare_subgraph_callables):
@@ -1424,3 +1494,194 @@ def test_fused_keys_max_length():  # generic fix for gh-5999
     fused, deps = fuse(d, rename_keys=True)
     for key in fused:
         assert len(key) < 150
+
+
+def func(*args):
+    try:
+        return "-".join(args)
+    except TypeError:
+        return "-".join(map(str, args))
+
+
+def func2(*args):
+    return "=".join(args)
+
+
+def func3(*args, **kwargs):
+    return "+".join(args) + "//" + "+".join(f"{k}={v}" for k, v in kwargs.items())
+
+
+def test_hybrid_legacy_new():
+    # e.g. after low level fusion
+
+    dsk = {
+        "foo": (func, Task("bar", func2, Alias("a"), "b"), "c"),
+    }
+    new_dsk = convert_legacy_graph(dsk)
+    assert new_dsk["foo"]({"a": "a"}) == "a=b-c"
+
+
+def test_fusion_legacy_hybrid():
+    dsk = {
+        "foo": (func, "a", "b"),
+        "bar": (func2, "foo", "c"),
+    }
+    from dask.optimization import fuse
+
+    # The first part of this test just tests a couple of basic assumptions about
+    # how fusing works. We want to make sure that this topology is detected by
+    # the fusion logic since otherwise the test below won't make any sense
+    fused, fused_deps = fuse(dsk, ["bar"])
+    assert len(fused) == 2
+    assert "bar" in fused
+    keys = set(fused)
+    keys.remove("bar")
+    fused_task_key = keys.pop()
+    assert fused["bar"] == fused_task_key
+    assert not fused_deps[fused_task_key]
+
+    new_dsk = convert_legacy_graph(fused)
+    assert isinstance(new_dsk["bar"], Alias)
+    assert new_dsk["bar"].key == fused_task_key
+    assert not new_dsk[fused_task_key].dependencies
+    assert new_dsk[fused_task_key]() == "a-b=c"
+
+    # Below this is the real test. Fusion should block when encountering a
+    # new style task
+
+    dsk = {
+        "foo": Task("foo", func, "a", "b"),
+        "bar": (func2, "foo", "c"),
+    }
+    fused, fused_deps = fuse(dsk, ["bar"])
+    assert len(fused) == 2
+    assert dsk == fused
+
+    dsk = {
+        "foo": (func, "a", "b"),
+        "bar": Task("bar", func2, TaskRef("foo"), "c"),
+    }
+    fused, fused_deps = fuse(dsk, ["bar"])
+    assert len(fused) == 2
+    assert dsk == fused
+
+
+def test_fusion_wide_legacy_hybrid():
+    with dask.config.set({"optimization.fuse.ave-width": 2}):
+        dsk = {
+            ("foo", 0): (func, "a", "b"),
+            ("foo", 1): (func, "a", "b"),
+            "bar": (func2, ("foo", 1), ("foo", 0)),
+        }
+        from dask.optimization import fuse
+
+        # The first part of this test just tests a couple of basic assumptions
+        # about how fusing works. We want to make sure that this topology is
+        # detected by the fusion logic since otherwise the test below won't make
+        # any sense
+        fused, fused_deps = fuse(dsk, ["bar"])
+        assert len(fused) == 2
+
+        keys = set(fused)
+        keys.remove("bar")
+        fused_task_key = keys.pop()
+        assert fused["bar"] == fused_task_key
+        assert not fused_deps[fused_task_key]
+
+        new_dsk = convert_legacy_graph(fused)
+        assert isinstance(new_dsk["bar"], Alias)
+        assert new_dsk["bar"].key == fused_task_key
+        assert not new_dsk[fused_task_key].dependencies
+        assert new_dsk[fused_task_key]() == "a-b=a-b"
+
+        # Below this is the real test. Fusion should block when encountering a
+        # new style tasks
+
+        t = Task(("foo", 0), func, "a", "b")
+        dsk = {
+            ("foo", 0): t,
+            ("foo", 1): (func, "a", "b"),
+            "bar": (func2, ("foo", 1), ("foo", 0)),
+        }
+        fused, fused_deps = fuse(dsk, ["bar"])
+        assert fused == {
+            ("foo", 0): t,
+            "foo-bar": (func2, (func, "a", "b"), ("foo", 0)),
+            "bar": "foo-bar",
+        }
+
+        t = Task(("foo", 1), func, "a", "b")
+        dsk = {
+            ("foo", 0): (func, "a", "b"),
+            ("foo", 1): t,
+            "bar": (func2, ("foo", 1), ("foo", 0)),
+        }
+        fused, fused_deps = fuse(dsk, ["bar"])
+        assert fused == {
+            ("foo", 1): t,
+            "foo-bar": (func2, ("foo", 1), (func, "a", "b")),
+            "bar": "foo-bar",
+        }
+
+        dsk = {
+            ("foo", 0): Task(("foo", 0), func, "a", "b"),
+            ("foo", 1): Task(("foo", 1), func, "a", "b"),
+            "bar": (func2, ("foo", 1), ("foo", 0)),
+        }
+        fused, fused_deps = fuse(dsk, ["bar"])
+        assert dsk == fused
+
+        dsk = {
+            ("foo", 0): (func, "a", "b"),
+            ("foo", 1): (func, "a", "b"),
+            "bar": Task("bar", func2, TaskRef(("foo", 1)), TaskRef(("foo", 0))),
+        }
+        fused, fused_deps = fuse(dsk, ["bar"])
+        assert dsk == fused
+
+
+def test_do_not_inline_legacy_hybrid():
+    from dask.core import get
+
+    dsk = {
+        "out": (func, "i", "d"),  # doctest: +SKIP
+        "i": (func2, "x"),
+        "d": (func3, "y"),
+        "x": "1",
+        "y": "1",
+    }
+    inlined = inline_functions(dsk, [], [func2])
+    assert get(inlined, ["out"]) == get(dsk, ["out"])
+    dsk = {
+        "foo": (func, "a", "b"),
+        "bar": (func2, "foo", "c"),
+        "baz": "bar",
+    }
+
+    inlined = inline_functions(
+        dsk,
+        {"baz"},
+        fast_functions=(func,),
+    )
+    assert len(inlined) == 2
+    assert inlined["baz"] == "bar"
+    assert get(dsk, ["baz"]) == get(inlined, ["baz"])
+
+    dsk = {
+        "foo": (func, "a", "b"),
+        "bar": Task("bar", func2, (TaskRef("foo"), "c")),
+        "baz": "bar",
+    }
+
+    inlined = inline_functions(
+        dsk,
+        {"baz"},
+        fast_functions=set(),
+    )
+    assert dsk == inlined
+    inlined = inline_functions(
+        dsk,
+        {"baz"},
+        fast_functions=(func,),
+    )
+    assert dsk == inlined

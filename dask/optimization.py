@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import math
 import numbers
-import uuid
+from collections.abc import Iterable
 from enum import Enum
+from typing import Any
 
 from dask import config, core, utils
+from dask._task_spec import GraphNode
+from dask.base import normalize_token, tokenize
 from dask.core import (
     flatten,
     get_dependencies,
@@ -15,6 +18,8 @@ from dask.core import (
     subs,
     toposort,
 )
+from dask.tokenize import normalize_token, tokenize
+from dask.typing import Graph, Key
 
 
 def cull(dsk, keys):
@@ -342,17 +347,23 @@ def inline_functions(
         dependencies = {k: get_dependencies(dsk, k) for k in dsk}
     dependents = reverse_dict(dependencies)
 
-    def inlinable(v):
-        try:
-            return functions_of(v).issubset(fast_functions)
-        except TypeError:
-            return False
+    def inlinable(key, task):
+        if (
+            not isinstance(task, GraphNode)
+            and istask(task)
+            and key not in output
+            and dependents[key]
+        ):
+            try:
+                if functions_of(task).issubset(fast_functions) and not any(
+                    isinstance(dsk[d], GraphNode) for d in dependents[key]
+                ):
+                    return True
+            except TypeError:
+                pass
+        return False
 
-    keys = [
-        k
-        for k, v in dsk.items()
-        if istask(v) and dependents[k] and k not in output and inlinable(v)
-    ]
+    keys = [k for k, v in dsk.items() if inlinable(k, v)]
 
     if keys:
         dsk = inline(
@@ -571,7 +582,10 @@ def fuse(
     if dependencies is None:
         deps = {k: get_dependencies(dsk, k, as_list=True) for k in dsk}
     else:
-        deps = dict(dependencies)
+        deps = {
+            k: v if isinstance(v, list) else get_dependencies(dsk, k, as_list=True)
+            for k, v in dependencies.items()
+        }
 
     rdeps = {}
     for k, vals in deps.items():
@@ -582,13 +596,17 @@ def fuse(
                 rdeps[v].append(k)
         deps[k] = set(vals)
 
-    reducible = {k for k, vals in rdeps.items() if len(vals) == 1}
-    if keys:
-        reducible -= keys
-
-    for k, v in dsk.items():
-        if type(v) is not tuple and not isinstance(v, (numbers.Number, str)):
-            reducible.discard(k)
+    reducible = set()
+    for k, vals in rdeps.items():
+        if (
+            len(vals) == 1
+            and k not in (keys or ())
+            and k in dsk
+            and not isinstance(dsk[k], GraphNode)
+            and (type(dsk[k]) is tuple or isinstance(dsk[k], (numbers.Number, str)))
+            and not any(isinstance(dsk[v], GraphNode) for v in vals)
+        ):
+            reducible.add(k)
 
     if not reducible and (
         not fuse_subgraphs or all(len(set(v)) != 1 for v in rdeps.values())
@@ -678,6 +696,11 @@ def fuse(
                         and
                         # Sanity check; don't go too deep if new levels introduce new edge dependencies
                         (no_new_edges or height < max_depth_new_edges)
+                        and (
+                            not isinstance(dsk[parent], GraphNode)
+                            # TODO: substitute can be implemented with GraphNode.inline
+                            # or isinstance(dsk[child_key], GraphNode)
+                        )
                     ):
                         # Perform substitutions as we go
                         val = subs(dsk[parent], child_key, child_task)
@@ -795,6 +818,16 @@ def fuse(
                         and
                         # Sanity check; don't go too deep if new levels introduce new edge dependencies
                         (no_new_edges or height < max_depth_new_edges)
+                        and (
+                            not isinstance(dsk[parent], GraphNode)
+                            and not any(
+                                isinstance(dsk[child_key], GraphNode)
+                                for child_key in children
+                            )
+                            # TODO: substitute can be implemented with GraphNode.inline
+                            # or all(
+                            #     isintance(dsk[child], GraphNode) for child in children
+                        )
                     ):
                         # Perform substitutions as we go
                         val = dsk[parent]
@@ -962,20 +995,26 @@ class SubgraphCallable:
         The name to use for the function.
     """
 
-    __slots__ = ("dsk", "outkey", "inkeys", "name")
+    dsk: Graph
+    outkey: Key
+    inkeys: tuple[Key, ...]
+    name: str
+    __slots__ = tuple(__annotations__)
 
-    def __init__(self, dsk, outkey, inkeys, name=None):
+    def __init__(
+        self, dsk: Graph, outkey: Key, inkeys: Iterable[Key], name: str | None = None
+    ):
         self.dsk = dsk
         self.outkey = outkey
-        self.inkeys = inkeys
+        self.inkeys = tuple(inkeys)
         if name is None:
-            name = f"subgraph_callable-{uuid.uuid4()}"
+            name = "subgraph_callable-" + tokenize(dsk, outkey, self.inkeys)
         self.name = name
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.name
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return (
             type(self) is type(other)
             and self.name == other.name
@@ -983,16 +1022,22 @@ class SubgraphCallable:
             and set(self.inkeys) == set(other.inkeys)
         )
 
-    def __ne__(self, other):
-        return not (self == other)
-
-    def __call__(self, *args):
+    def __call__(self, *args: Any) -> Any:
         if not len(args) == len(self.inkeys):
             raise ValueError("Expected %d args, got %d" % (len(self.inkeys), len(args)))
         return core.get(self.dsk, self.outkey, dict(zip(self.inkeys, args)))
 
-    def __reduce__(self):
-        return (SubgraphCallable, (self.dsk, self.outkey, self.inkeys, self.name))
+    def __reduce__(self) -> tuple:
+        return SubgraphCallable, (self.dsk, self.outkey, self.inkeys, self.name)
 
-    def __hash__(self):
-        return hash(tuple((self.outkey, frozenset(self.inkeys), self.name)))
+    def __hash__(self) -> int:
+        return hash((self.outkey, frozenset(self.inkeys), self.name))
+
+    def __dask_tokenize__(self) -> object:
+        return (
+            "SubgraphCallable",
+            normalize_token(self.dsk),
+            self.outkey,
+            self.inkeys,
+            self.name,
+        )

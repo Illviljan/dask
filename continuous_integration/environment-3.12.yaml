@@ -12,7 +12,6 @@ dependencies:
   - cloudpickle
   - partd
   - fsspec
-  - importlib_metadata
   - toolz
   # test dependencies
   - pre-commit
@@ -21,36 +20,36 @@ dependencies:
   - pytest-rerunfailures
   - pytest-timeout
   - pytest-xdist
-  - moto
+  - moto<5
   # Optional dependencies
   - mimesis
-  - numpy
+  - numpy >=2  # only tested here
   - pandas
+  - numba
   - flask
-  - fastparquet>=0.8.0
+  - fastparquet
   - h5py
-  - pytables
+  # Temporarily removing to allow `numpy >=2` to be installed
+  # - pytables
   - zarr
   # `tiledb-py=0.17.5` lead to strange seg faults in CI, However 0.18 is needed for 3.11
   # https://github.com/dask/dask/pull/9569
   # - tiledb-py # crashes on Python 3.11
   # - pyspark
-  # - tiledb>=2.5.0 # crashes on Python 3.11
+  # - tiledb # crashes on Python 3.11
   - xarray
-  - sqlalchemy>=1.4.16
-  - pyarrow>=13
+  - sqlalchemy
+  - pyarrow>=14.0.1
   - coverage
   - jsonschema
-  # # other -- IO
+  # other -- IO
   - boto3
   - botocore
   - bokeh
   - httpretty
   - aiohttp
-  - s3fs
-  # Need a new `crick` release with support for `numpy=1.24+`
-  # https://github.com/dask/crick/issues/25
-  # - crick
+  - s3fs>=2021.9.0
+  - crick
   - cytoolz
   - distributed
   - ipython
@@ -59,7 +58,6 @@ dependencies:
   - ipywidgets<8.0.5
   - ipykernel<6.22.0
   - lz4
-  # - numba no support for 3.12
   - psutil
   - requests
   - scikit-image
@@ -69,11 +67,12 @@ dependencies:
   - sparse
   - cachey
   - python-graphviz
-  # Not available on macOS for Python 3.12 yet
-  # - python-cityhash
+  - python-cityhash
   - python-xxhash
   - mmh3
   - jinja2
+  - matplotlib  # visualize test
   - pip
   - pip:
     - git+https://github.com/dask/distributed
+    - git+https://github.com/dask/dask-expr

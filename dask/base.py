@@ -1,45 +1,55 @@
 from __future__ import annotations
 
 import dataclasses
-import datetime
-import hashlib
 import inspect
-import os
-import pathlib
-import pickle
-import threading
 import uuid
 import warnings
 from collections import OrderedDict
-from collections.abc import Callable, Hashable, Iterator, Mapping
+from collections.abc import Hashable, Iterator, Mapping
 from concurrent.futures import Executor
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
-from enum import Enum
 from functools import partial
 from numbers import Integral, Number
 from operator import getitem
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
+from typing import Any, Literal, TypeVar
 
-from tlz import curry, groupby, identity, merge
-from tlz.functoolz import Compose
+from tlz import groupby, merge
 
 from dask import config, local
 from dask._compatibility import EMSCRIPTEN
 from dask.core import flatten
 from dask.core import get as simple_get
-from dask.core import literal, quote
-from dask.hashing import hash_buffer_hex
+from dask.core import quote
 from dask.system import CPU_COUNT
 from dask.typing import Key, SchedulerGetCallable
 from dask.utils import (
-    Dispatch,
     apply,
     ensure_dict,
     is_namedtuple_instance,
     key_split,
     shorten_traceback,
 )
+
+_DistributedClient = None
+_get_distributed_client = None
+_DISTRIBUTED_AVAILABLE = None
+
+
+def _distributed_available() -> bool:
+    # Lazy import in get_scheduler can be expensive
+    global _DistributedClient, _get_distributed_client, _DISTRIBUTED_AVAILABLE
+    if _DISTRIBUTED_AVAILABLE is not None:
+        return _DISTRIBUTED_AVAILABLE  # type: ignore[unreachable]
+    try:
+        from distributed import Client as _DistributedClient
+        from distributed.worker import get_client as _get_distributed_client
+
+        _DISTRIBUTED_AVAILABLE = True
+    except ImportError:
+        _DISTRIBUTED_AVAILABLE = False
+    return _DISTRIBUTED_AVAILABLE
+
 
 __all__ = (
     "DaskMethodsMixin",
@@ -58,10 +68,12 @@ __all__ = (
     "clone_key",
 )
 
-if TYPE_CHECKING:
-    from _typeshed import ReadableBuffer
+# Backwards compat
+from dask.tokenize import TokenizationError, normalize_token, tokenize  # noqa: F401
 
-_annotations: ContextVar[dict[str, Any]] = ContextVar("annotations", default={})
+_annotations: ContextVar[dict[str, Any] | None] = ContextVar(
+    "annotations", default=None
+)
 
 
 def get_annotations() -> dict[str, Any]:
@@ -75,7 +87,7 @@ def get_annotations() -> dict[str, Any]:
     --------
     annotate
     """
-    return _annotations.get()
+    return _annotations.get() or {}
 
 
 @contextmanager
@@ -181,8 +193,10 @@ def annotate(**annotations: Any) -> Iterator[None]:
             "'allow_other_workers' annotations must be a bool or a callable, but got %s"
             % annotations["allow_other_workers"]
         )
-
-    token = _annotations.set(merge(_annotations.get(), annotations))
+    ctx_annot = _annotations.get()
+    if ctx_annot is None:
+        ctx_annot = {}
+    token = _annotations.set(merge(ctx_annot, annotations))
     try:
         yield
     finally:
@@ -210,16 +224,32 @@ def is_dask_collection(x) -> bool:
     implementation of the protocol.
 
     """
-    try:
-        return x.__dask_graph__() is not None
-    except (AttributeError, TypeError):
+    if (
+        isinstance(x, type)
+        or not hasattr(x, "__dask_graph__")
+        or not callable(x.__dask_graph__)
+    ):
         return False
+
+    pkg_name = getattr(type(x), "__module__", "").split(".")[0]
+    if pkg_name in ("dask_expr", "dask_cudf"):
+        # Temporary hack to avoid graph materialization. Note that this won't work with
+        # dask_expr.array objects wrapped by xarray or pint. By the time dask_expr.array
+        # is published, we hope to be able to rewrite this method completely.
+        # Read: https://github.com/dask/dask/pull/10676
+        return True
+
+    # xarray, pint, and possibly other wrappers always define a __dask_graph__ method,
+    # but it may return None if they wrap around a non-dask object.
+    # In all known dask collections other than dask-expr,
+    # calling __dask_graph__ is cheap.
+    return x.__dask_graph__() is not None
 
 
 class DaskMethodsMixin:
     """A mixin adding standard dask collection methods"""
 
-    __slots__ = ()
+    __slots__ = ("__weakref__",)
 
     def visualize(self, filename="mydask", format=None, optimize_graph=False, **kwargs):
         """Render the computation of this object's task graph using graphviz.
@@ -251,7 +281,7 @@ class DaskMethodsMixin:
 
         Returns
         -------
-        result : IPython.diplay.Image, IPython.display.SVG, or None
+        result : IPython.display.Image, IPython.display.SVG, or None
             See dask.dot.dot_graph for more information.
 
         See Also
@@ -349,13 +379,11 @@ class DaskMethodsMixin:
             raise ImportError(
                 "Using async/await with dask requires the `distributed` package"
             ) from e
-        from tornado import gen
 
-        @gen.coroutine
-        def f():
+        async def f():
             if futures_of(self):
-                yield wait(self)
-            raise gen.Return(self)
+                await wait(self)
+            return self
 
         return f().__await__()
 
@@ -506,7 +534,11 @@ def unpack_collections(*args, traverse=True):
         dsk[collections_token] = quote(results)
         return simple_get(dsk, out)
 
-    return collections, repack
+    # The original `collections` is kept alive by the closure
+    # This causes the collection to be only freed by the garbage collector
+    collections2 = list(collections)
+    collections.clear()
+    return collections2, repack
 
 
 def optimize(*args, traverse=True, **kwargs):
@@ -545,9 +577,9 @@ def optimize(*args, traverse=True, **kwargs):
     >>> a2, b2 = dask.optimize(a, b)
 
     >>> a2.compute() == a.compute()
-    True
+    np.True_
     >>> b2.compute() == b.compute()
-    True
+    np.True_
     """
     collections, repack = unpack_collections(*args, traverse=traverse)
     if not collections:
@@ -600,12 +632,12 @@ def compute(
     >>> a = da.arange(10, chunks=2).sum()
     >>> b = da.arange(10, chunks=2).mean()
     >>> dask.compute(a, b)
-    (45, 4.5)
+    (np.int64(45), np.float64(4.5))
 
     By default, dask objects inside python collections will also be computed:
 
     >>> dask.compute({'a': a, 'b': b, 'c': 1})
-    ({'a': 45, 'b': 4.5, 'c': 1},)
+    ({'a': np.int64(45), 'b': np.float64(4.5), 'c': 1},)
     """
 
     collections, repack = unpack_collections(*args, traverse=traverse)
@@ -705,7 +737,7 @@ def visualize(
 
     Returns
     -------
-    result : IPython.diplay.Image, IPython.display.SVG, or None
+    result : IPython.display.Image, IPython.display.SVG, or None
         See dask.dot.dot_graph for more information.
 
     See Also
@@ -722,7 +754,30 @@ def visualize(
 
     dsk = dict(collections_to_dsk(args, optimize_graph=optimize_graph))
 
+    return visualize_dsk(
+        dsk=dsk,
+        filename=filename,
+        traverse=traverse,
+        optimize_graph=optimize_graph,
+        maxval=maxval,
+        engine=engine,
+        **kwargs,
+    )
+
+
+def visualize_dsk(
+    dsk,
+    filename="mydask",
+    traverse=True,
+    optimize_graph=False,
+    maxval=None,
+    o=None,
+    engine: Literal["cytoscape", "ipycytoscape", "graphviz"] | None = None,
+    limit=None,
+    **kwargs,
+):
     color = kwargs.get("color")
+    from dask.order import diagnostics, order
 
     if color in {
         "order",
@@ -736,12 +791,20 @@ def visualize(
         "memoryincreases",
         "memorydecreases",
         "memorypressure",
+        "critical",
+        "cpath",
     }:
         import matplotlib.pyplot as plt
 
-        from dask.order import diagnostics, order
+        if o is None:
+            o_stats = order(dsk, return_stats=True)
+            o = {k: v.priority for k, v in o_stats.items()}
+        elif isinstance(next(iter(o.values())), int):
+            o_stats = order(dsk, return_stats=True)
+        else:
+            o_stats = o
+            o = {k: v.priority for k, v in o.items()}
 
-        o = order(dsk)
         try:
             cmap = kwargs.pop("cmap")
         except KeyError:
@@ -771,11 +834,15 @@ def visualize(
                     key: max(0, val.num_data_when_released - val.num_data_when_run)
                     for key, val in info.items()
                 }
-            else:  # memorydecreases
+            elif color.endswith("memorydecreases"):
                 values = {
                     key: max(0, val.num_data_when_run - val.num_data_when_released)
                     for key, val in info.items()
                 }
+            elif color.split("-")[-1] in {"critical", "cpath"}:
+                values = {key: val.critical_path for key, val in o_stats.items()}
+            else:
+                raise NotImplementedError(color)
 
             if color.startswith("order-"):
 
@@ -786,14 +853,16 @@ def visualize(
             values = o
         if maxval is None:
             maxval = max(1, max(values.values()))
-        colors = {k: _colorize(cmap(v / maxval, bytes=True)) for k, v in values.items()}
+        colors = {
+            k: _colorize(tuple(map(int, cmap(v / maxval, bytes=True))))
+            for k, v in values.items()
+        }
         if data_values is None:
-            data_values = values
             data_colors = colors
         else:
             data_colors = {
-                k: _colorize(cmap(v / maxval, bytes=True))
-                for k, v in data_values.items()
+                k: _colorize(tuple(map(int, cmap(v / maxval, bytes=True))))
+                for k, v in values.items()
             }
 
         kwargs["function_attributes"] = {
@@ -819,7 +888,6 @@ def visualize(
                 engine = "cytoscape"
             except ImportError:
                 pass
-
     if engine == "graphviz":
         from dask.dot import dot_graph
 
@@ -935,372 +1003,6 @@ def persist(*args, traverse=True, optimize_graph=True, scheduler=None, **kwargs)
     return repack(results2)
 
 
-############
-# Tokenize #
-############
-
-
-class _HashFactory(Protocol):
-    def __call__(
-        self, string: ReadableBuffer = b"", *, usedforsecurity: bool = True
-    ) -> hashlib._Hash:
-        ...
-
-
-# Pass `usedforsecurity=False` to support FIPS builds of Python
-def _md5(x: ReadableBuffer, _hashlib_md5: _HashFactory = hashlib.md5) -> hashlib._Hash:
-    return _hashlib_md5(x, usedforsecurity=False)
-
-
-def tokenize(*args, **kwargs):
-    """Deterministic token
-
-    >>> tokenize([1, 2, '3'])
-    '7d6a880cd9ec03506eee6973ff551339'
-
-    >>> tokenize('Hello') == tokenize('Hello')
-    True
-    """
-    hasher = _md5(str(tuple(map(normalize_token, args))).encode())
-    if kwargs:
-        hasher.update(str(normalize_token(kwargs)).encode())
-    return hasher.hexdigest()
-
-
-normalize_token = Dispatch()
-normalize_token.register(
-    (
-        int,
-        float,
-        str,
-        bytes,
-        type(None),
-        type,
-        slice,
-        complex,
-        type(Ellipsis),
-        datetime.date,
-        datetime.time,
-        datetime.datetime,
-        datetime.timedelta,
-        pathlib.PurePath,
-    ),
-    identity,
-)
-
-
-@normalize_token.register(dict)
-def normalize_dict(d):
-    return normalize_token(sorted(d.items(), key=str))
-
-
-@normalize_token.register(OrderedDict)
-def normalize_ordered_dict(d):
-    return type(d).__name__, normalize_token(list(d.items()))
-
-
-@normalize_token.register(set)
-def normalize_set(s):
-    return normalize_token(sorted(s, key=str))
-
-
-def _normalize_seq_func(seq):
-    # Defined outside normalize_seq to avoid unnecessary redefinitions and
-    # therefore improving computation times.
-    try:
-        return list(map(normalize_token, seq))
-    except RecursionError:
-        if not config.get("tokenize.ensure-deterministic"):
-            return uuid.uuid4().hex
-
-        raise RuntimeError(
-            f"Sequence {str(seq)} cannot be deterministically hashed. Please, see "
-            "https://docs.dask.org/en/latest/custom-collections.html#implementing-deterministic-hashing "
-            "for more information"
-        )
-
-
-@normalize_token.register((tuple, list))
-def normalize_seq(seq):
-    return type(seq).__name__, _normalize_seq_func(seq)
-
-
-@normalize_token.register(literal)
-def normalize_literal(lit):
-    return "literal", normalize_token(lit())
-
-
-@normalize_token.register(range)
-def normalize_range(r):
-    return list(map(normalize_token, [r.start, r.stop, r.step]))
-
-
-@normalize_token.register(Enum)
-def normalize_enum(e):
-    return type(e).__name__, e.name, e.value
-
-
-@normalize_token.register(object)
-def normalize_object(o):
-    method = getattr(o, "__dask_tokenize__", None)
-    if method is not None:
-        return method()
-
-    if callable(o):
-        return normalize_function(o)
-
-    if dataclasses.is_dataclass(o):
-        return normalize_dataclass(o)
-
-    if not config.get("tokenize.ensure-deterministic"):
-        return uuid.uuid4().hex
-
-    raise RuntimeError(
-        f"Object {str(o)} cannot be deterministically hashed. Please, see "
-        "https://docs.dask.org/en/latest/custom-collections.html#implementing-deterministic-hashing "
-        "for more information"
-    )
-
-
-function_cache: dict[Callable, Callable | tuple | str | bytes] = {}
-function_cache_lock = threading.Lock()
-
-
-def normalize_function(func: Callable) -> Callable | tuple | str | bytes:
-    try:
-        return function_cache[func]
-    except KeyError:
-        result = _normalize_function(func)
-        if len(function_cache) >= 500:  # clear half of cache if full
-            with function_cache_lock:
-                if len(function_cache) >= 500:
-                    for k in list(function_cache)[::2]:
-                        del function_cache[k]
-        function_cache[func] = result
-        return result
-    except TypeError:  # not hashable
-        return _normalize_function(func)
-
-
-def _normalize_function(func: Callable) -> tuple | str | bytes:
-    if isinstance(func, Compose):
-        first = getattr(func, "first", None)
-        funcs = reversed((first,) + func.funcs) if first else func.funcs
-        return tuple(normalize_function(f) for f in funcs)
-    elif isinstance(func, (partial, curry)):
-        args = tuple(normalize_token(i) for i in func.args)
-        if func.keywords:
-            kws = tuple(
-                (k, normalize_token(v)) for k, v in sorted(func.keywords.items())
-            )
-        else:
-            kws = None
-        return (normalize_function(func.func), args, kws)
-    else:
-        try:
-            result = pickle.dumps(func, protocol=4)
-            if b"__main__" not in result:  # abort on dynamic functions
-                return result
-        except Exception:
-            pass
-        if not config.get("tokenize.ensure-deterministic"):
-            try:
-                import cloudpickle
-
-                return cloudpickle.dumps(func, protocol=4)
-            except Exception:
-                return str(func)
-        else:
-            raise RuntimeError(
-                f"Function {str(func)} may not be deterministically hashed by "
-                "cloudpickle. See: https://github.com/cloudpipe/cloudpickle/issues/385 "
-                "for more information."
-            )
-
-
-def normalize_dataclass(obj):
-    fields = [
-        (field.name, getattr(obj, field.name)) for field in dataclasses.fields(obj)
-    ]
-    return (
-        normalize_function(type(obj)),
-        _normalize_seq_func(fields),
-    )
-
-
-@normalize_token.register_lazy("pandas")
-def register_pandas():
-    import pandas as pd
-
-    @normalize_token.register(pd.Index)
-    def normalize_index(ind):
-        values = ind.array
-        return [ind.name, normalize_token(values)]
-
-    @normalize_token.register(pd.MultiIndex)
-    def normalize_index(ind):
-        codes = ind.codes
-        return (
-            [ind.name]
-            + [normalize_token(x) for x in ind.levels]
-            + [normalize_token(x) for x in codes]
-        )
-
-    @normalize_token.register(pd.Categorical)
-    def normalize_categorical(cat):
-        return [normalize_token(cat.codes), normalize_token(cat.dtype)]
-
-    @normalize_token.register(pd.arrays.PeriodArray)
-    @normalize_token.register(pd.arrays.DatetimeArray)
-    @normalize_token.register(pd.arrays.TimedeltaArray)
-    def normalize_period_array(arr):
-        return [normalize_token(arr.asi8), normalize_token(arr.dtype)]
-
-    @normalize_token.register(pd.arrays.IntervalArray)
-    def normalize_interval_array(arr):
-        return [
-            normalize_token(arr.left),
-            normalize_token(arr.right),
-            normalize_token(arr.closed),
-        ]
-
-    @normalize_token.register(pd.Series)
-    def normalize_series(s):
-        return [
-            s.name,
-            s.dtype,
-            normalize_token(s._values),
-            normalize_token(s.index),
-        ]
-
-    @normalize_token.register(pd.DataFrame)
-    def normalize_dataframe(df):
-        mgr = df._mgr
-        data = list(mgr.arrays) + [df.columns, df.index]
-        return list(map(normalize_token, data))
-
-    @normalize_token.register(pd.api.extensions.ExtensionArray)
-    def normalize_extension_array(arr):
-        import numpy as np
-
-        return normalize_token(np.asarray(arr))
-
-    # Dtypes
-    @normalize_token.register(pd.api.types.CategoricalDtype)
-    def normalize_categorical_dtype(dtype):
-        return [normalize_token(dtype.categories), normalize_token(dtype.ordered)]
-
-    @normalize_token.register(pd.api.extensions.ExtensionDtype)
-    def normalize_period_dtype(dtype):
-        return normalize_token(dtype.name)
-
-
-@normalize_token.register_lazy("numpy")
-def register_numpy():
-    import numpy as np
-
-    @normalize_token.register(np.ndarray)
-    def normalize_array(x):
-        if not x.shape:
-            return (x.item(), x.dtype)
-        if hasattr(x, "mode") and getattr(x, "filename", None):
-            if hasattr(x.base, "ctypes"):
-                offset = (
-                    x.ctypes._as_parameter_.value - x.base.ctypes._as_parameter_.value
-                )
-            else:
-                offset = 0  # root memmap's have mmap object as base
-            if hasattr(
-                x, "offset"
-            ):  # offset numpy used while opening, and not the offset to the beginning of file
-                offset += x.offset
-            return (
-                x.filename,
-                os.path.getmtime(x.filename),
-                x.dtype,
-                x.shape,
-                x.strides,
-                offset,
-            )
-        if x.dtype.hasobject:
-            try:
-                try:
-                    # string fast-path
-                    data = hash_buffer_hex(
-                        "-".join(x.flat).encode(
-                            encoding="utf-8", errors="surrogatepass"
-                        )
-                    )
-                except UnicodeDecodeError:
-                    # bytes fast-path
-                    data = hash_buffer_hex(b"-".join(x.flat))
-            except (TypeError, UnicodeDecodeError):
-                try:
-                    data = hash_buffer_hex(pickle.dumps(x, pickle.HIGHEST_PROTOCOL))
-                except Exception:
-                    # pickling not supported, use UUID4-based fallback
-                    if not config.get("tokenize.ensure-deterministic"):
-                        data = uuid.uuid4().hex
-                    else:
-                        raise RuntimeError(
-                            f"``np.ndarray`` with object ``dtype`` {str(x)} cannot "
-                            "be deterministically hashed. Please, see "
-                            "https://docs.dask.org/en/latest/custom-collections.html#implementing-deterministic-hashing "  # noqa: E501
-                            "for more information"
-                        )
-        else:
-            try:
-                data = hash_buffer_hex(x.ravel(order="K").view("i1"))
-            except (BufferError, AttributeError, ValueError):
-                data = hash_buffer_hex(x.copy().ravel(order="K").view("i1"))
-        return (data, x.dtype, x.shape, x.strides)
-
-    @normalize_token.register(np.matrix)
-    def normalize_matrix(x):
-        return type(x).__name__, normalize_array(x.view(type=np.ndarray))
-
-    normalize_token.register(np.dtype, repr)
-    normalize_token.register(np.generic, repr)
-
-    @normalize_token.register(np.ufunc)
-    def normalize_ufunc(x):
-        try:
-            name = x.__name__
-            if getattr(np, name) is x:
-                return "np." + name
-        except AttributeError:
-            return normalize_function(x)
-
-    @normalize_token.register(np.random.BitGenerator)
-    def normalize_bit_generator(bg):
-        return normalize_token(bg.state)
-
-
-@normalize_token.register_lazy("scipy")
-def register_scipy():
-    import scipy.sparse as sp
-
-    def normalize_sparse_matrix(x, attrs):
-        return (
-            type(x).__name__,
-            normalize_seq(normalize_token(getattr(x, key)) for key in attrs),
-        )
-
-    for cls, attrs in [
-        (sp.dia_matrix, ("data", "offsets", "shape")),
-        (sp.bsr_matrix, ("data", "indices", "indptr", "blocksize", "shape")),
-        (sp.coo_matrix, ("data", "row", "col", "shape")),
-        (sp.csr_matrix, ("data", "indices", "indptr", "shape")),
-        (sp.csc_matrix, ("data", "indices", "indptr", "shape")),
-        (sp.lil_matrix, ("data", "rows", "shape")),
-    ]:
-        normalize_token.register(cls, partial(normalize_sparse_matrix, attrs=attrs))
-
-    @normalize_token.register(sp.dok_matrix)
-    def normalize_dok_matrix(x):
-        return type(x).__name__, normalize_token(sorted(x.items()))
-
-
 def _colorize(t):
     """Convert (r, g, b) triple to "#RRGGBB" string
 
@@ -1390,13 +1092,12 @@ def get_scheduler(get=None, scheduler=None, collections=None, cls=None):
         elif isinstance(scheduler, str):
             scheduler = scheduler.lower()
 
-            try:
-                from distributed import Client
-
-                Client.current(allow_global=True)
-                client_available = True
-            except (ImportError, ValueError):
-                client_available = False
+            client_available = False
+            if _distributed_available():
+                assert _DistributedClient is not None
+                with suppress(ValueError):
+                    _DistributedClient.current(allow_global=True)
+                    client_available = True
             if scheduler in named_schedulers:
                 if client_available:
                     warnings.warn(
@@ -1409,9 +1110,8 @@ def get_scheduler(get=None, scheduler=None, collections=None, cls=None):
                     raise RuntimeError(
                         f"Requested {scheduler} scheduler but no Client active."
                     )
-                from distributed.worker import get_client
-
-                return get_client().get
+                assert _get_distributed_client is not None
+                return _get_distributed_client().get
             else:
                 raise ValueError(
                     "Expected one of [distributed, %s]"
@@ -1558,12 +1258,12 @@ def clone_key(key: KeyOrStrT, seed: Hashable) -> KeyOrStrT:
 
     Examples
     --------
-    >>> clone_key("x", 123)
-    'x-dc2b8d1c184c72c19faa81c797f8c6b0'
-    >>> clone_key("inc-cbb1eca3bafafbb3e8b2419c4eebb387", 123)
-    'inc-f81b5a88038a2132882aa29a9fcfec06'
-    >>> clone_key(("sum-cbb1eca3bafafbb3e8b2419c4eebb387", 4, 3), 123)
-    ('sum-fd6be9e9fe07fc232ad576fa997255e8', 4, 3)
+    >>> clone_key("x", 123)  # doctest: +SKIP
+    'x-c4fb64ccca807af85082413d7ef01721'
+    >>> clone_key("inc-cbb1eca3bafafbb3e8b2419c4eebb387", 123)  # doctest: +SKIP
+    'inc-bc629c23014a4472e18b575fdaf29ee7'
+    >>> clone_key(("sum-cbb1eca3bafafbb3e8b2419c4eebb387", 4, 3), 123)  # doctest: +SKIP
+    ('sum-c053f3774e09bd0f7de6044dbc40e71d', 4, 3)
     """
     if isinstance(key, tuple) and key and isinstance(key[0], str):
         return (clone_key(key[0], seed),) + key[1:]
